@@ -7,14 +7,28 @@ export const LISTINO: Record<string, { ingresso: number; uscita: number; cacheLe
   "claude-haiku-5-5": { ingresso: 0.1, uscita: 0.5, cacheLettura: 0.01, cacheScrittura: 0.125 },
   "claude-sonnet-5-5": { ingresso: 2, uscita: 10, cacheLettura: 0.1, cacheScrittura: 2.5 },
 };
+/**
+ * Haiku 5.5 costa di più quando una singola richiesta supera i 100.000 token in ingresso
+ * ($0,50 / $2,50 per milione invece di $0,10 / $0,50). La cache segue la stessa proporzione.
+ */
+export const SOGLIA_LUNGA = 100_000;
+export const LISTINO_LUNGO: Record<string, { ingresso: number; uscita: number; cacheLettura: number; cacheScrittura: number }> = {
+  "claude-haiku-5-5": { ingresso: 0.5, uscita: 2.5, cacheLettura: 0.05, cacheScrittura: 0.625 },
+};
 /** Modello sconosciuto: si usa il prezzo più alto noto, per non sottostimare. */
 const PREZZO_PRUDENTE = { ingresso: 4, uscita: 20, cacheLettura: 0.2, cacheScrittura: 5 };
 
 export interface Uso { ingresso: number; uscita: number; cacheLettura: number; cacheScrittura: number }
 
 export function costoUsd(modello: string, u: Uso): number {
-  const p = LISTINO[modello] || PREZZO_PRUDENTE;
+  const lunga = u.ingresso + u.cacheLettura + u.cacheScrittura > SOGLIA_LUNGA;
+  const p = (lunga && LISTINO_LUNGO[modello]) || LISTINO[modello] || PREZZO_PRUDENTE;
   return (u.ingresso * p.ingresso + u.uscita * p.uscita + u.cacheLettura * p.cacheLettura + u.cacheScrittura * p.cacheScrittura) / 1_000_000;
+}
+
+/** Stima prudente dei token di un testo (circa 3 caratteri per token: in italiano di solito sono di più). */
+export function stimaToken(testo: string): number {
+  return Math.ceil(testo.length / 3);
 }
 
 export function meseDi(ms: number, fuso: string): string {

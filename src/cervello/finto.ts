@@ -19,6 +19,7 @@ export function creaCervelloFinto(copione: Copione): Cervello & { richieste: Ric
         chiamate,
         fine: out.fine ?? (chiamate.length ? "strumenti" : "fine"),
         uso: out.uso ?? { ingresso: 1000, uscita: 100, cacheLettura: 0, cacheScrittura: 0 },
+        consumi: out.consumi,
       };
     },
   };

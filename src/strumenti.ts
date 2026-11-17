@@ -8,7 +8,7 @@ import { ErroreCostructo } from "./costructo.js";
 import { marcaDati } from "./dati.js";
 import { aggiungiImpegno, cancellaImpegno, cercaImpegni, descriviImpegno, impegniProssimiGiorni, type Impegno } from "./agenda.js";
 import { aggiungiMemoria, elencaMemorie, type Spazio, type Vista } from "./memorie.js";
-import { controllaPermesso, type Azione } from "./permessi.js";
+import { controllaPermesso, SCRITTURE, type Azione } from "./permessi.js";
 import { registra } from "./registro.js";
 import { scaricaCalendario, occorrenze } from "./calendario.js";
 import { inizioGiorno, oraMinuti, descriviGiorno } from "./tempo.js";
@@ -22,6 +22,8 @@ export type EventoFlusso =
   | { tipo: "numero"; etichetta: string; valore: number; suffisso: string }
   | { tipo: "conferma"; id: string; domanda: string; opzioni: Array<{ indice: number; testo: string }> }
   | { tipo: "avviso"; testo: string }
+  /** Il testo detto finora in questo turno va sostituito con `testo` (es. rifiuto a metà risposta). */
+  | { tipo: "scarta"; testo: string }
   | { tipo: "fine"; conversazione: string; costoUsd: number };
 
 export interface ContestoStrumenti {
@@ -34,6 +36,8 @@ export interface ContestoStrumenti {
   linkCalendario: () => string;
   emetti: (e: EventoFlusso) => void;
   fetchFn?: typeof fetch;
+  /** Scritture già fatte in questo turno, per tipo di azione (una sola cancellazione senza conferma). */
+  scritture?: Map<string, number>;
 }
 
 const oggetto = (properties: Record<string, unknown>) => ({ type: "object", properties, required: Object.keys(properties), additionalProperties: false });
@@ -45,6 +49,8 @@ interface Strumento<S extends z.ZodTypeAny> {
   viste: Vista[];
   input: S;
   spazio?: (i: z.infer<S>) => Spazio | undefined;
+  /** Oggetto della scrittura (titolo o testo), da ritrovare nel messaggio di Luigi. */
+  oggetto?: (i: z.infer<S>) => string;
   esegui: (i: z.infer<S>, c: ContestoStrumenti) => Promise<string> | string;
 }
 function strumento<S extends z.ZodTypeAny>(s: Strumento<S>): Strumento<S> { return s; }
@@ -107,7 +113,7 @@ export const STRUMENTI = [
         minuti: { type: "integer", description: "Durata stimata in minuti (di solito 60)" },
       }),
     },
-    azione: "agenda.aggiungi", viste: ["privato", "tutto"],
+    azione: "agenda.aggiungi", viste: ["privato", "tutto"], oggetto: (i) => i.titolo,
     input: z.object({ titolo: z.string().min(1).max(140), data: z.string(), ora: z.string().max(5), minuti: z.number().int().min(5).max(1440) }).strict(),
     esegui: (i, c) => {
       const imp = aggiungiImpegno(c.db, i, c.fuso);
@@ -121,7 +127,7 @@ export const STRUMENTI = [
       descrizione: "Cancella un impegno dell'agenda privata di Jarvis (non quelli di Costructo o del calendario collegato). Se più impegni corrispondono, Jarvis chiede a Luigi quale.",
       schema: oggetto({ titolo: { type: "string", description: "Titolo o parte del titolo dell'impegno" } }),
     },
-    azione: "agenda.cancella", viste: ["privato", "tutto"], input: z.object({ titolo: z.string().min(2).max(140) }).strict(),
+    azione: "agenda.cancella", viste: ["privato", "tutto"], oggetto: (i) => i.titolo, input: z.object({ titolo: z.string().min(2).max(140) }).strict(),
     esegui: (i, c) => {
       const trovati = cercaImpegni(c.db, i.titolo, c.fuso);
       if (!trovati.length) return "Nessun impegno dell'agenda di Jarvis con quel titolo. Quelli di Costructo o del calendario si cambiano lì.";
@@ -151,6 +157,7 @@ export const STRUMENTI = [
     azione: "memoria.salva", viste: ["privato", "lavoro", "tutto"],
     input: z.object({ testo: z.string().min(2).max(500), spazio: z.enum(["privato", "lavoro"]) }).strict(),
     spazio: (i) => i.spazio,
+    oggetto: (i) => i.testo,
     esegui: (i, c) => {
       const m = aggiungiMemoria(c.db, i.spazio, i.testo, "jarvis");
       c.emetti({ tipo: "memoria", spazio: m.spazio, testo: m.testo });
@@ -216,7 +223,10 @@ export async function eseguiStrumento(nome: string, input: unknown, c: ContestoS
     registra(c.db, s.azione, "errore", "jarvis", { strumento: nome, motivo: "input non valido" });
     return { contenuto: "Dati dello strumento non validi: ricontrolla i campi.", errore: true };
   }
-  const decisione = controllaPermesso(s.azione, { vista: c.vista, messaggioLuigi: c.messaggioLuigi, spazio: s.spazio?.(v.data) });
+  const scritture = c.scritture ?? new Map<string, number>();
+  const decisione = controllaPermesso(s.azione, {
+    vista: c.vista, messaggioLuigi: c.messaggioLuigi, spazio: s.spazio?.(v.data), oggetto: s.oggetto?.(v.data), giaFatte: scritture.get(s.azione) ?? 0,
+  });
   if (decisione.esito === "negato") {
     registra(c.db, s.azione, "negato", "jarvis", { strumento: nome, motivo: decisione.motivo });
     return { contenuto: `Non consentito: ${decisione.motivo}`, errore: true };
@@ -230,6 +240,8 @@ export async function eseguiStrumento(nome: string, input: unknown, c: ContestoS
   c.emetti({ tipo: "strumento", nome });
   try {
     const contenuto = await s.esegui(v.data, c);
+    const scritto = SCRITTURE.has(s.azione) && !(s.azione === "agenda.cancella" && !contenuto.startsWith("Cancellato"));
+    if (scritto) scritture.set(s.azione, (scritture.get(s.azione) ?? 0) + 1);
     if (s.azione !== "agenda.cancella" || !contenuto.startsWith("Ho trovato")) {
       registra(c.db, s.azione, "fatto", "jarvis", { strumento: nome, input: v.data });
     }
@@ -288,7 +300,10 @@ export function rispondiConferma(db: Db, id: string, scelta: "conferma" | "annul
   return { ok: true, messaggio };
 }
 
-export function confermaInAttesa(db: Db, conversazione: string, ora = Date.now()): { id: string; dati: string } | undefined {
-  return db.prepare("SELECT id, dati FROM conferme WHERE conversazione_id = ? AND stato = 'in_attesa' AND creata > ? ORDER BY creata DESC LIMIT 1")
-    .get(conversazione, ora - 15 * 60_000) as { id: string; dati: string } | undefined;
+export interface ConfermaAperta { id: string; dati: string; creata: number }
+
+/** Conferme ancora in attesa nella conversazione, nate dopo l'istante `da` (e non scadute), dalla più recente. */
+export function confermeAperte(db: Db, conversazione: string, da = 0, ora = Date.now()): ConfermaAperta[] {
+  return db.prepare("SELECT id, dati, creata FROM conferme WHERE conversazione_id = ? AND stato = 'in_attesa' AND creata > ? AND creata >= ? ORDER BY creata DESC, rowid DESC")
+    .all(conversazione, ora - 15 * 60_000, da) as ConfermaAperta[];
 }

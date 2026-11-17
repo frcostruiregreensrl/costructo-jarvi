@@ -241,6 +241,7 @@ async function invia(testo) {
       else if (e.tipo === "memoria") scena.highlight();
       else if (e.tipo === "strumento") scena.burstSynapses(20);
       else if (e.tipo === "avviso") $("#dialogo").append(crea("p", "avviso", e.testo));
+      else if (e.tipo === "scarta") { scritto = e.testo; bolla.textContent = scritto || "…"; voce.stop(); }
       else if (e.tipo === "modello") bolla.dataset.modello = e.modello;
       else if (e.tipo === "fine") {
         stato.conversazione[stato.vista] = e.conversazione;
