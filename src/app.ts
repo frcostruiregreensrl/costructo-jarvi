@@ -356,6 +356,7 @@ export function creaApp(o: OpzioniApp) {
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const stato = (err as { status?: number }).status;
+    if (stato === 404) return res.status(404).end();
     if (stato === 413) return res.status(413).json({ errore: "Richiesta troppo grande." });
     if (stato === 400) return res.status(400).json({ errore: "Richiesta non valida." });
     registra(db, "server.errore", "errore", "sistema", { messaggio: String((err as Error)?.message || err).slice(0, 300) });
