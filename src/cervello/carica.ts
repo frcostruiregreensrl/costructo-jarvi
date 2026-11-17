@@ -10,7 +10,7 @@ export async function caricaCervelloAnthropic(apiKey: string): Promise<Cervello>
   } catch (e) {
     const codice = (e as { code?: string }).code;
     if (codice === "ERR_MODULE_NOT_FOUND" || /anthropic-ai\/sdk/.test(String((e as Error).message))) {
-      throw new CervelloNonDisponibile("Il cervello Claude non è ancora installato (pacchetto @anthropic-ai/sdk da autorizzare).");
+      throw new CervelloNonDisponibile("Il cervello Claude non è ancora installato (manca il pacchetto @anthropic-ai/sdk: eseguire npm install).");
     }
     throw e;
   }

@@ -235,3 +235,10 @@ code { font-family: var(--mono); background: var(--sfondo-2); padding: 1px 5px; 
   #sfera { width: 220px; height: 220px; }
   main { padding-top: 20px; }
 }
+@media (min-width: 700px) {
+  .barra-parla { display: flex; justify-content: center; align-items: center; gap: 12px; }
+  .barra-parla > * { margin: 0; }
+  .scrivi { width: min(520px, 100%); flex: 1 1 auto; max-width: 520px; }
+  .parla { width: 200px; flex: none; min-height: 52px; }
+  main { padding-bottom: 120px; }
+}
