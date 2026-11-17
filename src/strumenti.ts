@@ -233,7 +233,7 @@ export async function eseguiStrumento(nome: string, input: unknown, c: ContestoS
   }
   if (decisione.esito === "conferma") {
     const id = creaConferma(c, s.azione, { strumento: nome, input: v.data });
-    c.emetti({ tipo: "conferma", id, domanda: descriviProposta(nome, v.data, c.fuso), opzioni: [] });
+    c.emetti({ tipo: "conferma", id, domanda: descriviProposta(nome, v.data), opzioni: [] });
     registra(c.db, s.azione, "richiesta_conferma", "jarvis", { strumento: nome, input: v.data, motivo: decisione.motivo, conferma: id });
     return { contenuto: "Non fatto: serve la conferma di Luigi, che vede un pulsante. Diglielo in una frase.", errore: false };
   }
@@ -253,7 +253,7 @@ export async function eseguiStrumento(nome: string, input: unknown, c: ContestoS
   }
 }
 
-function descriviProposta(nome: string, input: Record<string, unknown>, _fuso: string): string {
+function descriviProposta(nome: string, input: Record<string, unknown>): string {
   if (nome === "agenda_aggiungi") return `Vuoi che segni «${input.titolo}» il ${input.data}${input.ora ? ` alle ${input.ora}` : ""}?`;
   if (nome === "agenda_cancella") return `Vuoi che cancelli l'impegno «${input.titolo}»?`;
   if (nome === "ricordo_salva") return `Vuoi che ricordi (${input.spazio}): «${input.testo}»?`;

@@ -155,7 +155,7 @@ export function creaApp(o: OpzioniApp) {
     db, fuso: config.fusoOrario, modelloPredefinito: config.modelloPredefinito, modelloApprofondito: config.modelloApprofondito,
     cervello, costructo, linkCalendario, fetchFn: o.fetchFn,
   };
-  const prepara = (req: Request) => creaBriefing({ db, fuso: config.fusoOrario, costructo: costructo(), linkCalendario: linkCalendario(), fetchFn: o.fetchFn }).then((b) => b);
+  const prepara = () => creaBriefing({ db, fuso: config.fusoOrario, costructo: costructo(), linkCalendario: linkCalendario(), fetchFn: o.fetchFn });
 
   // ------------------------------------------------------------ avvio, briefing, domanda
   app.get("/api/avvio", (_req, res) => {
@@ -163,7 +163,7 @@ export function creaApp(o: OpzioniApp) {
     res.json({ nome: nomeUtente(db), impostazioni: imp, spesa: riepilogoMese(db, imp.tettoMensileUsd, config.fusoOrario), costructo: !!costructo()?.configurato, pushPronte: !!o.invia, chiavePush: config.vapidPubblica || null });
   });
 
-  app.get("/api/briefing", async (req, res) => { res.json(await prepara(req)); });
+  app.get("/api/briefing", async (_req, res) => { res.json(await prepara()); });
 
   const SchemaDomanda = z.object({ messaggio: z.string().trim().min(1).max(2000), vista: VISTA, conversazione: z.string().uuid().optional() });
   app.post("/api/chiedi", async (req, res) => {
@@ -336,9 +336,9 @@ export function creaApp(o: OpzioniApp) {
     if (d.success) togliIscrizione(db, d.data.endpoint);
     res.json({ ok: true });
   });
-  app.post("/api/push/prova", async (req, res) => {
+  app.post("/api/push/prova", async (_req, res) => {
     if (!o.invia) return res.json({ ok: false, messaggio: "Notifiche non configurate sul server (mancano le chiavi VAPID)." });
-    const b = await prepara(req);
+    const b = await prepara();
     const n = await inviaATutti(db, o.invia, "Prova di Jarvis", b.righe.slice(1, 3).map((r) => r.testo).join(" "));
     res.json({ ok: n > 0, messaggio: n ? "Notifica inviata." : "Nessun dispositivo iscritto." });
   });
