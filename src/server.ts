@@ -8,7 +8,7 @@ import { creaInvio, controllaOraBriefing } from "./push.js";
 import { creaBriefing, testoNotifica } from "./briefing.js";
 import { creaClientCostructo } from "./costructo.js";
 import { leggiSegreto } from "./impostazioni.js";
-import { registra } from "./registro.js";
+import { registra, pulisciRegistroVecchio } from "./registro.js";
 import { utenteEsiste } from "./sicurezza/utente.js";
 
 const config = leggiConfig();
@@ -31,6 +31,8 @@ const app = creaApp({ config, db, cifratore, invia });
 function pulizia() {
   const tolti = pulisciConversazioniVecchie(db);
   if (tolti) registra(db, "conversazioni.pulizia", "fatto", "sistema", { messaggiCancellati: tolti });
+  const righe = pulisciRegistroVecchio(db);
+  if (righe) registra(db, "registro.pulizia", "fatto", "sistema", { righeAlleggerite: righe });
 }
 pulizia();
 setInterval(pulizia, 6 * 3600_000).unref();

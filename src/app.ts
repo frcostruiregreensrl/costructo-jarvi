@@ -13,7 +13,7 @@ import { caricaCervelloAnthropic } from "./cervello/carica.js";
 import { creaSessione, sessioneValida, chiudiSessione, nomeCookie, intestazioneCookie, leggiCookie, DURATA_SESSIONE_MS } from "./sicurezza/sessioni.js";
 import { bloccatoPer, registraErrore, azzera, ritardoAccesso, REGOLA_ACCESSO_IP, REGOLA_ACCESSO_GLOBALE, CHIAVE_GLOBALE } from "./sicurezza/limiti.js";
 import { utenteEsiste, verificaAccesso, nomeUtente } from "./sicurezza/utente.js";
-import { registra, leggiRegistro } from "./registro.js";
+import { registra, leggiRegistro, dimenticaNelRegistro } from "./registro.js";
 import { leggiImpostazioni, salvaImpostazioni, salvaSegreto, leggiSegreto, maschera } from "./impostazioni.js";
 import { elencaMemorie, aggiungiMemoria, correggiMemoria, cancellaMemoria, esportaMemorie } from "./memorie.js";
 import { impegniProssimiGiorni, aggiungiImpegno, cancellaImpegno, descriviImpegno } from "./agenda.js";
@@ -213,7 +213,9 @@ export function creaApp(o: OpzioniApp) {
     res.json(m);
   });
   app.delete("/api/memorie/:id", (req, res) => {
+    const prima = elencaMemorie(db, "tutto").find((m) => m.id === String(req.params.id));
     const ok = cancellaMemoria(db, String(req.params.id));
+    if (ok && prima) dimenticaNelRegistro(db, prima.testo);
     registra(db, "memoria.cancella", ok ? "fatto" : "errore", "luigi", { id: req.params.id });
     res.status(ok ? 200 : 404).json({ ok });
   });
@@ -234,6 +236,7 @@ export function creaApp(o: OpzioniApp) {
   });
   app.delete("/api/agenda/:id", (req, res) => {
     const i = cancellaImpegno(db, String(req.params.id));
+    if (i) dimenticaNelRegistro(db, i.titolo);
     registra(db, "agenda.cancella", i ? "fatto" : "errore", "luigi", { id: req.params.id });
     res.status(i ? 200 : 404).json({ ok: !!i });
   });
