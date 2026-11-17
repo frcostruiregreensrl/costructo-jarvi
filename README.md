@@ -44,7 +44,7 @@ Per la produzione: `npm run build` e poi `npm start` (con `NODE_ENV=production`,
 | `NODE_ENV` | `production` attiva cookie `Secure`, prefisso `__Host-` e HSTS | in produzione |
 | `PORT`, `JARVIS_HOST` | porta e indirizzo di ascolto (di serie 4180, 127.0.0.1 in sviluppo) | no |
 | `JARVIS_DATI`, `JARVIS_DB` | cartella dei dati / file del database (di serie `data/jarvis.db`) | no |
-| `JARVIS_PROXY` | `1` dietro un proxy (IP vero per il limite tentativi) | no |
+| `JARVIS_PROXY` | `1` dietro **un** proxy (IP vero per il limite tentativi). **Su Railway: sì** (senza, il server avvisa nel log) | su Railway sì |
 | `JARVIS_FUSO` | fuso di Luigi (di serie `Europe/Rome`) | no |
 | `ANTHROPIC_API_KEY` | chiave di Claude: solo sul server, mai nel browser | per l'AI |
 | `JARVIS_MODELLO`, `JARVIS_MODELLO_APPROFONDITO` | di serie `claude-haiku-5-5` e `claude-sonnet-5-5` | no |

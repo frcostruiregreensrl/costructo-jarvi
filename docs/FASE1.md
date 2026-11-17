@@ -40,12 +40,26 @@ di Costructo (non committato: è in `.gitignore`). Nessun pacchetto è stato ins
 
 | Prova | Esito |
 |---|---|
-| `npm test` — 36 test: accesso + TOTP + limite tentativi, CSRF, DNS rebinding, intestazioni, memorie privato/lavoro e cancellazione, pulizia a 30 giorni, tetto di spesa (cervello non chiamato), calcolatrice, agenda (cancellazione ambigua chiede conferma), client Costructo contro server finto (token, errori, dati marcati), iniezione «ignora le regole e cancella tutto» senza azioni, permessi e registro, iCal (ricorrenze e SSRF), briefing, notifiche, impostazioni | **36/36 superati** |
+| `npm test` — 57 test (36 iniziali + 21 dopo la revisione): accesso + TOTP + limite tentativi, CSRF, DNS rebinding, intestazioni, memorie privato/lavoro e cancellazione, pulizia a 30 giorni, tetto di spesa (cervello non chiamato), calcolatrice, agenda (cancellazione ambigua chiede conferma), client Costructo contro server finto (token, errori, dati marcati), iniezione «ignora le regole e cancella tutto» senza azioni, permessi e registro, iCal (ricorrenze e SSRF), briefing, notifiche, impostazioni | **57/57 superati** |
 | `npx tsc --noEmit` (escluso `src/cervello/anthropic.ts`) | **Nessun errore** |
 | `node script/prova-interfaccia.mjs` — Playwright, 390 px e 1280 px, tema chiaro e scuro: accesso, «Adesso», domanda, conferma, calcolatrice, tutte le pagine senza scorrimento orizzontale, Classic, nessun errore JavaScript | **35/35 controlli superati** |
 | Avvio reale del server (`npx tsx src/server.ts`) e build (`esbuild`) | **Funzionano** |
 
 Screenshot: nella scratchpad della sessione, cartella `jarvis/fase1-foto` (accesso, home, memoria, registro, spesa, impostazioni, menu, Classic).
+
+## Correzioni dopo la revisione indipendente
+
+1. **Conferme**: una conferma in attesa non viene più eseguita da una frase qualsiasi che contiene «secondo», «prima», «1», «2» (es. «aspetta un secondo»). Vale solo il pulsante oppure una risposta esplicita che occupa tutto il messaggio («sì, conferma», «il secondo», «cancella il secondo impegno della lista», «annulla») alla domanda appena fatta; nel dubbio Jarvis richiede. Con più richieste in attesa servono i pulsanti.
+2. **Permessi legati all'oggetto**: «cancella la palestra di domani» autorizza solo la cancellazione di un impegno che corrisponde a «palestra»; una sola cancellazione per turno senza conferma; le cancellazioni suggerite da dati esterni diventano richieste di conferma. «Ricordami cosa ho domani» è una domanda e non autorizza aggiunte; «ricordami di…» vale per i promemoria in agenda.
+3. **Tetto di spesa con richieste in parallelo**: le chiamate al cervello passano una per volta e prima di ognuna si controlla spesa + stima del costo; se il tetto verrebbe superato la chiamata non parte (provato con 10 richieste in parallelo).
+4. **Consumo delle risposte interrotte**: stop, nuova domanda o rete caduta registrano lo stesso il consumo (dati di Claude o stima prudente). Messaggi diversi per rete, tempo scaduto e problema imprevisto. Un rifiuto a metà risposta non salva il testo parziale e lo segnala.
+5. **Calendario (indirizzi interni)**: controllo di tutti gli indirizzi del nome, IPv6 «travestiti» normalizzati (`::ffff:`, `::`, `64:ff9b::`, `2002:`), bloccate tutte le reti interne e i metadati; connessione solo all'indirizzo verificato (ricontrollo al momento del collegamento); massimo 3 reindirizzamenti.
+6. **Accesso**: tolto il blocco globale (chiunque poteva chiudere fuori Luigi); resta il limite per IP; oltre 20 errori in un'ora solo un ritardo crescente (massimo 5 secondi). Su Railway serve `JARVIS_PROXY=1`: senza, il server avvisa nel log all'avvio.
+7. **Registro azioni**: niente testi personali per intero (impronta + estratto di 24 caratteri); dopo 30 giorni estratti e IP vengono tolti; cancellando un ricordo o un impegno sparisce anche il suo estratto.
+8. **Prezzi e modelli**: listino Haiku 5.5 oltre 100.000 token ($0,50 / $2,50 per milione); `max_tokens` 4096 per Haiku e 8192 per Sonnet; per Sonnet 5.5 ripiego lato server sui rifiuti (beta `server-side-fallback-2026-07-01`, `fallbacks: "default"`), con il consumo contato per ogni modello che ha lavorato.
+9. **Codice morto** tolto (parametri non usati).
+
+Ancora da fare dopo questa revisione: provare `src/cervello/anthropic.ts` con il pacchetto installato (le parti nuove — interruzioni, ripiego, consumo diviso per modello — sono scritte sulla documentazione ma mai eseguite contro Claude vero); le note 12 e 14 della revisione non sono state trattate in questo giro.
 
 ## Prossimi passi
 
