@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#0b1a1f" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f4f1ea" media="(prefers-color-scheme: light)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Jarvis">
+  <meta name="description" content="J.A.R.V.I.S., l'assistente personale di Luigi">
+  <title>Jarvis</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icone/icona.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icone/icona-180.png">
+  <link rel="stylesheet" href="/stile.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="salta" href="#principale">Vai al contenuto</a>
+
+  <!-- ACCESSO -->
+  <section id="accesso" class="accesso" hidden aria-labelledby="titoloAccesso">
+    <form id="formAccesso" class="scheda-accesso" autocomplete="on">
+      <div class="marchio grande" aria-hidden="true"><i></i><i></i><i></i></div>
+      <h1 id="titoloAccesso">J.A.R.V.I.S.</h1>
+      <p class="sotto">Accesso riservato a Luigi</p>
+      <label>Password
+        <input id="password" type="password" autocomplete="current-password" required minlength="1">
+      </label>
+      <label>Codice dell'app di autenticazione
+        <input id="codice" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required placeholder="6 cifre">
+      </label>
+      <p id="erroreAccesso" class="errore" role="alert"></p>
+      <button class="primario" type="submit">Entra</button>
+    </form>
+  </section>
+
+  <!-- APP -->
+  <div id="app" hidden>
+    <header class="testata">
+      <a class="marchio-testo" href="#home" aria-label="Jarvis, pagina principale">
+        <span class="marchio" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><b>J.A.R.V.I.S.</b><small id="saluto">Assistente personale</small></span>
+      </a>
+      <button id="apriMenu" class="icona" aria-expanded="false" aria-controls="menu" aria-label="Menu">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+    </header>
+
+    <nav id="menu" class="menu" hidden aria-label="Sezioni">
+      <a href="#home">Home</a>
+      <a href="#memoria">Cosa sa di me</a>
+      <a href="#registro">Cosa ha fatto</a>
+      <a href="#spesa">Spesa del mese</a>
+      <a href="#impostazioni">Impostazioni</a>
+      <a href="/classic.html">Modalità Classic (Mac)</a>
+      <button id="esci" class="link">Esci</button>
+    </nav>
+
+    <main id="principale" tabindex="-1">
+      <!-- HOME -->
+      <section id="pagina-home" class="pagina" aria-labelledby="titoloHome">
+        <h1 id="titoloHome" class="nascosto">Home</h1>
+        <div class="schede" role="tablist" aria-label="Spazio">
+          <button role="tab" data-vista="privato" aria-selected="false">Privato</button>
+          <button role="tab" data-vista="lavoro" aria-selected="false">Lavoro</button>
+          <button role="tab" data-vista="tutto" aria-selected="true">Tutto</button>
+        </div>
+
+        <div class="sfera-box">
+          <canvas id="sfera" aria-hidden="true"></canvas>
+          <p id="statoVoce" class="stato-voce" aria-live="polite">Pronto</p>
+        </div>
+
+        <section class="riquadro adesso" aria-labelledby="titoloAdesso">
+          <div class="riquadro-testa">
+            <h2 id="titoloAdesso">Adesso</h2>
+            <button id="leggiBriefing" class="link">Leggi il briefing</button>
+          </div>
+          <ol id="adesso" class="lista-adesso"><li class="vuoto">Caricamento…</li></ol>
+          <p id="avvisiBriefing" class="avvisi"></p>
+        </section>
+
+        <section id="dialogo" class="dialogo" aria-live="polite" aria-label="Conversazione"></section>
+      </section>
+
+      <!-- MEMORIA -->
+      <section id="pagina-memoria" class="pagina" hidden aria-labelledby="titoloMemoria">
+        <h1 id="titoloMemoria">Cosa sa di me</h1>
+        <p class="sotto">Quello che Jarvis ricorda, diviso tra privato e lavoro. Puoi correggerlo o cancellarlo quando vuoi. Le conversazioni si cancellano da sole dopo 30 giorni; i ricordi restano finché non li cancelli tu.</p>
+        <div class="schede" role="tablist" aria-label="Spazio della memoria">
+          <button role="tab" data-mvista="privato" aria-selected="false">Privato</button>
+          <button role="tab" data-mvista="lavoro" aria-selected="false">Lavoro</button>
+          <button role="tab" data-mvista="tutto" aria-selected="true">Tutto</button>
+        </div>
+        <form id="nuovaMemoria" class="riga-form">
+          <label class="nascosto" for="testoMemoria">Nuovo ricordo</label>
+          <input id="testoMemoria" maxlength="500" placeholder="Aggiungi un ricordo…" required>
+          <label class="nascosto" for="spazioMemoria">Spazio</label>
+          <select id="spazioMemoria"><option value="privato">Privato</option><option value="lavoro">Lavoro</option></select>
+          <button class="primario" type="submit">Aggiungi</button>
+        </form>
+        <ul id="listaMemorie" class="lista-memorie"></ul>
+        <p><a href="/api/memorie/esporta" download>Scarica la memoria come file di testo</a></p>
+      </section>
+
+      <!-- REGISTRO -->
+      <section id="pagina-registro" class="pagina" hidden aria-labelledby="titoloRegistro">
+        <h1 id="titoloRegistro">Cosa ha fatto</h1>
+        <p class="sotto">Ogni azione di Jarvis e ogni accesso, con l'esito. Le azioni bloccate o in attesa di conferma sono evidenziate.</p>
+        <ol id="listaRegistro" class="lista-registro"></ol>
+        <button id="altroRegistro" class="secondario" hidden>Mostra altri</button>
+      </section>
+
+      <!-- SPESA -->
+      <section id="pagina-spesa" class="pagina" hidden aria-labelledby="titoloSpesa">
+        <h1 id="titoloSpesa">Spesa del mese</h1>
+        <div class="riquadro spesa">
+          <p class="cifra"><b id="spesaValore">—</b> <span>su un tetto di <b id="spesaTetto">—</b></span></p>
+          <div class="barra-spesa" role="progressbar" aria-labelledby="titoloSpesa" aria-valuemin="0" aria-valuemax="100" id="barraSpesa"><i id="barraSpesaInterna"></i></div>
+          <p id="spesaNota" class="sotto"></p>
+        </div>
+        <table class="tabella">
+          <caption class="nascosto">Spesa per modello</caption>
+          <thead><tr><th scope="col">Modello</th><th scope="col">Richieste</th><th scope="col">Spesa</th></tr></thead>
+          <tbody id="spesaModelli"></tbody>
+        </table>
+        <p class="sotto">Cifre stimate dal listino Anthropic (dollari). Claude Haiku 5.5 è il modello di tutti i giorni; Claude Sonnet 5.5 parte solo se dici «pensaci bene». Calcoli, briefing e frasi rapide non costano niente.</p>
+      </section>
+
+      <!-- IMPOSTAZIONI -->
+      <section id="pagina-impostazioni" class="pagina" hidden aria-labelledby="titoloImpostazioni">
+        <h1 id="titoloImpostazioni">Impostazioni</h1>
+        <form id="formImpostazioni" class="modulo">
+          <fieldset>
+            <legend>Spesa</legend>
+            <label>Tetto di spesa mensile (dollari)
+              <input id="impTetto" type="number" min="0" max="1000" step="0.5" required>
+            </label>
+            <p class="aiuto">Al limite Jarvis si ferma e ti avvisa. Calcoli, agenda e briefing continuano a funzionare.</p>
+          </fieldset>
+          <fieldset>
+            <legend>Voce</legend>
+            <label>Come ti chiamo
+              <input id="impNome" maxlength="40" required>
+            </label>
+            <label>Voce del dispositivo
+              <select id="impVoce"><option value="">Automatica</option></select>
+            </label>
+            <label>Velocità
+              <input id="impVelocita" type="range" min="0.6" max="1.6" step="0.02">
+            </label>
+            <label class="spunta"><input id="impLeggi" type="checkbox"> Leggi le risposte a voce</label>
+            <button type="button" id="provaVoce" class="secondario">Prova la voce</button>
+            <label class="spunta disattivato"><input type="checkbox" disabled> Voce ElevenLabs (non attiva in questa fase)</label>
+          </fieldset>
+          <fieldset>
+            <legend>Parole di risveglio (modalità Classic su Mac)</legend>
+            <label>Parole, separate da virgola
+              <input id="impParole" maxlength="120" required>
+            </label>
+          </fieldset>
+          <fieldset>
+            <legend>Briefing del mattino</legend>
+            <label>Orario
+              <input id="impOrario" type="time" required>
+            </label>
+            <label class="spunta"><input id="impPush" type="checkbox"> Notifica sul telefono</label>
+            <label class="spunta"><input id="impMeteo" type="checkbox"> Meteo dei cantieri (Open-Meteo)</label>
+            <button type="button" id="attivaNotifiche" class="secondario">Attiva le notifiche su questo dispositivo</button>
+            <p id="statoNotifiche" class="aiuto"></p>
+          </fieldset>
+          <fieldset>
+            <legend>Aspetto</legend>
+            <label>Tema
+              <select id="impTema"><option value="automatico">Automatico</option><option value="chiaro">Chiaro</option><option value="scuro">Scuro</option></select>
+            </label>
+          </fieldset>
+          <p id="esitoImpostazioni" class="esito" role="status"></p>
+          <button class="primario" type="submit">Salva</button>
+        </form>
+
+        <form id="formCollegamenti" class="modulo">
+          <fieldset>
+            <legend>Collegamento a Costructo (sola lettura)</legend>
+            <label>Indirizzo di Costructo
+              <input id="colUrl" type="url" placeholder="https://…" autocomplete="off">
+            </label>
+            <label>Token (inizia con csa_)
+              <input id="colToken" type="password" autocomplete="off" placeholder="lascia vuoto per non cambiarlo">
+            </label>
+            <p class="aiuto">Il token resta sul server, cifrato: qui vedi solo le ultime cifre (<span id="colTokenMascherato">nessuno</span>).</p>
+            <button type="button" id="provaCostructo" class="secondario">Prova il collegamento</button>
+          </fieldset>
+          <fieldset>
+            <legend>Calendario personale (iCal, sola lettura)</legend>
+            <label>Link iCal (webcal:// o https://)
+              <input id="colIcal" type="password" autocomplete="off" placeholder="lascia vuoto per non cambiarlo">
+            </label>
+            <p class="aiuto">Collegato: <span id="colIcalStato">no</span>. Per Apple iCloud la lettura completa con password per app arriva nella Fase 2.</p>
+          </fieldset>
+          <p id="esitoCollegamenti" class="esito" role="status"></p>
+          <button class="primario" type="submit">Salva i collegamenti</button>
+        </form>
+
+        <section class="riquadro" aria-labelledby="titoloSiri">
+          <h2 id="titoloSiri">«Ehi Siri, Jarvis» su iPhone e iPad</h2>
+          <ol class="passi">
+            <li>In Safari apri Jarvis, tocca <b>Condividi</b> e poi <b>Aggiungi alla schermata Home</b>.</li>
+            <li>Apri l'app <b>Comandi</b>, tocca <b>+</b>, scegli <b>Apri URL</b> e scrivi l'indirizzo di Jarvis seguito da <code>/#parla</code>.</li>
+            <li>Chiama il comando <b>Jarvis</b>. Da ora basta dire «Ehi Siri, Jarvis»: si apre con il pulsante Parla pronto. Toccalo e parla.</li>
+          </ol>
+          <p class="aiuto">Su iPhone una app web non può restare in ascolto in sottofondo: per questo si usa «premi e parla». La parola di risveglio sempre attiva c'è nella modalità Classic sul Mac.</p>
+        </section>
+      </section>
+    </main>
+
+    <footer id="barraParla" class="barra-parla">
+      <form id="scrivi" class="scrivi">
+        <label class="nascosto" for="domanda">Scrivi a Jarvis</label>
+        <input id="domanda" autocomplete="off" maxlength="2000" placeholder="Scrivi a Jarvis…" enterkeyhint="send">
+        <button type="submit" class="icona" aria-label="Invia">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l16-8-6 16-2-6z"/></svg>
+        </button>
+      </form>
+      <button id="parla" class="parla" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        <span>Parla</span>
+      </button>
+    </footer>
+  </div>
+</body>
+</html>
