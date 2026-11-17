@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#000">
+  <title>J.A.R.V.I.S. · Classic</title>
+  <link rel="icon" href="/icone/icona.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/classic/classic.css">
+  <script type="importmap">{ "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }</script>
+  <script type="module" src="/classic/classic.js"></script>
+</head>
+<body data-mode="boot">
+  <canvas id="gl" aria-hidden="true"></canvas>
+  <div id="labels" aria-hidden="true"></div>
+  <div class="vignette"></div>
+  <div class="grain"></div>
+  <div class="scan"></div>
+
+  <header class="top">
+    <div class="brand">
+      <div class="mark"><i></i><i></i><i></i></div>
+      <div><b>J.A.R.V.I.S.</b><small>COSTRUCTO · PERSONAL COGNITIVE SYSTEM</small></div>
+    </div>
+    <div class="status"><span class="dot"></span><span id="statusText">INIZIALIZZAZIONE</span><span id="brainChip" hidden><i>CERVELLO</i><b id="brainName"></b></span></div>
+    <div class="clock"><b id="clock">--:--:--</b><small id="date"></small></div>
+  </header>
+
+  <section id="stats" aria-live="polite"></section>
+
+  <section id="timeline">
+    <h3><span>AGENDA</span><em>OGGI</em></h3>
+    <ol id="agenda"></ol>
+  </section>
+
+  <div id="thinking">
+    <span id="thinkLabel">ANALISI SEMANTICA</span>
+    <div class="think-row"><b id="synapses">0</b><small>SINAPSI<br>ATTIVATE</small><em id="thinkTime">0.0s</em></div>
+  </div>
+
+  <div id="caption" aria-live="polite">
+    <p id="you"></p>
+    <p id="says"></p>
+  </div>
+
+  <div id="hint">
+    <span>DÌ</span><b id="hintWord">«JARVIS»</b>
+    <div class="mic"><i id="micBar"></i></div>
+  </div>
+
+  <div id="conferma" role="dialog" aria-label="Conferma richiesta"><p id="confermaTesto"></p><div class="azioni" id="confermaAzioni"></div></div>
+
+  <div id="gate">
+    <div class="gate-inner">
+      <div class="gate-ring"></div>
+      <b>J.A.R.V.I.S.</b>
+      <span id="gateText">CLICCA PER INIZIALIZZARE</span>
+      <small>Abilita microfono e audio · schermo intero</small>
+    </div>
+  </div>
+
+  <nav id="controls">
+    <a id="tornaApp" href="/">APP</a>
+    <button id="pauseBtn"><span>PAUSA</span></button>
+    <button id="fsBtn"><span>SCHERMO INTERO</span></button>
+    <small>D diagnostica · T scrivi · W risveglia · R reset · J registrazione · F schermo intero</small>
+  </nav>
+
+  <form id="typeBox"><input placeholder="Scrivi a Jarvis e premi Invio…" autocomplete="off" aria-label="Scrivi a Jarvis"></form>
+
+  <aside id="debug">
+    <div class="dh">VOICE DIAGNOSTICS</div>
+    <dl>
+      <dt>STATO</dt><dd id="debugState">BOOT</dd>
+      <dt>MIC</dt><dd id="debugMic">—</dd>
+      <dt>ASCOLTO</dt><dd id="debugEngine">—</dd>
+      <dt>REC</dt><dd id="debugRec">—</dd>
+      <dt>VOCE</dt><dd id="debugVoice">—</dd>
+      <dt>MENTE</dt><dd id="debugMind">—</dd>
+      <dt>GRAFICA</dt><dd id="debugScene">—</dd>
+      <dt>SENTITO</dt><dd id="debugText">—</dd>
+      <dt>NOTE</dt><dd id="debugError">—</dd>
+    </dl>
+  </aside>
+</body>
+</html>
