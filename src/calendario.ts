@@ -1,12 +1,16 @@
 // Lettura di un calendario tramite link iCal (.ics): Apple iCloud, Google, Outlook. SOLA LETTURA.
 // Portato da calendar.mjs di J.A.R.V.I.S. (MIT, © 2026 Thomas Colombo) con queste correzioni:
-// - sicurezza: solo https (webcal → https), niente indirizzi interni (SSRF), redirect controllati, limite di 2 MB;
+// - sicurezza: solo https (webcal → https), niente indirizzi interni (SSRF) controllati su tutti gli indirizzi
+//   del nome e di nuovo al momento della connessione, al massimo 3 redirect controllati, limite di 2 MB;
 // - cache per link (non più una sola globale), fuso di Luigi invece di quello del server;
 // - ricorrenze mensili/annuali con BYDAY ("2° martedì", "ultimo venerdì") e BYMONTHDAY;
 // - nomi di fuso di Windows/Outlook più comuni, TZID tra virgolette;
 // - i testi degli eventi sono DATI: chi li usa li passa all'AI marcati come non attendibili.
 import { lookup } from "node:dns/promises";
+import type { LookupAddress } from "node:dns";
+import { get as httpsGet } from "node:https";
 import { isIP } from "node:net";
+import { Readable } from "node:stream";
 import { scartoFuso } from "./tempo.js";
 
 export interface OraMuro { y: number; mo: number; d: number; h: number; mi: number; s: number; tz: string; allDay: boolean }
@@ -31,50 +35,151 @@ const FUSI_WINDOWS: Record<string, string> = {
 // ---------------------------------------------------------------- scaricamento sicuro
 const MAX_BYTE = 2 * 1024 * 1024;
 
-export function ipPrivato(ip: string): boolean {
-  if (isIP(ip) === 4) {
-    const [a, b] = ip.split(".").map(Number);
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+// Reti che il server non deve mai raggiungere: loopback, private, link-local, CGNAT, multicast,
+// metadati dei cloud (169.254.169.254, fd00:ec2::254), documentazione, riservate.
+const RETI_V4: Array<[string, number]> = [
+  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12],
+  ["192.0.0.0", 24], ["192.0.2.0", 24], ["192.88.99.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15], ["198.51.100.0", 24],
+  ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4],
+];
+
+function v4aNumero(ip: string): number {
+  return ip.split(".").reduce((n, p) => n * 256 + Number(p), 0);
+}
+
+function v4Privato(n: number): boolean {
+  return RETI_V4.some(([rete, bit]) => (n >>> (32 - bit)) === (v4aNumero(rete) >>> (32 - bit)));
+}
+
+/** Indirizzo IPv6 in 8 gruppi da 16 bit (accetta "::" e la coda IPv4 «::ffff:1.2.3.4»). null se non valido. */
+export function espandiV6(ip: string): number[] | null {
+  let x = ip.toLowerCase().split("%")[0];
+  const v4 = /(\d+\.\d+\.\d+\.\d+)$/.exec(x);
+  if (v4) {
+    if (isIP(v4[1]) !== 4) return null;
+    const n = v4aNumero(v4[1]);
+    x = x.slice(0, -v4[1].length) + `${(n >>> 16).toString(16)}:${(n & 0xffff).toString(16)}`;
   }
-  const x = ip.toLowerCase();
-  if (x.startsWith("::ffff:")) return ipPrivato(x.slice(7));
-  return x === "::1" || x === "::" || x.startsWith("fc") || x.startsWith("fd") || x.startsWith("fe80");
+  const doppio = x.split("::");
+  if (doppio.length > 2) return null;
+  const sx = doppio[0] ? doppio[0].split(":") : [];
+  const dx = doppio.length === 2 && doppio[1] ? doppio[1].split(":") : [];
+  const mancano = 8 - sx.length - dx.length;
+  if (doppio.length === 1 ? mancano !== 0 : mancano < 1) return null;
+  const gruppi = [...sx, ...Array(doppio.length === 2 ? mancano : 0).fill("0"), ...dx];
+  if (gruppi.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+  return gruppi.map((g) => parseInt(g, 16));
+}
+
+/**
+ * Vero se l'indirizzo è interno o comunque da non contattare. Normalizza gli IPv6 che contengono
+ * un IPv4 (::ffff:, ::a.b.c.d, 64:ff9b::/96, 2002::/16) e controlla l'IPv4 dentro.
+ * Un indirizzo che non si riesce a leggere è considerato interno.
+ */
+export function ipPrivato(ip: string): boolean {
+  const pulito = ip.replace(/^\[|\]$/g, "");
+  if (isIP(pulito) === 4) return v4Privato(v4aNumero(pulito));
+  if (isIP(pulito) !== 6) return true;
+  const g = espandiV6(pulito);
+  if (!g) return true;
+  const v4 = (alto: number, basso: number) => v4Privato(((alto << 16) >>> 0) + basso);
+  const zeri = (n: number) => g.slice(0, n).every((x) => x === 0);
+  if (zeri(5) && g[5] === 0xffff) return v4(g[6], g[7]);                 // ::ffff:a.b.c.d (IPv4-mapped)
+  if (zeri(6)) return true;                                                // ::, ::1, ::a.b.c.d (IPv4-compatibile, deprecato)
+  if (zeri(4) && g[4] === 0xffff && g[5] === 0) return true;               // ::ffff:0:a.b.c.d (traduzione SIIT)
+  if (g[0] === 0x64 && g[1] === 0xff9b) return g.slice(2, 6).some((x) => x !== 0) || v4(g[6], g[7]); // NAT64 64:ff9b::/96 (il resto, es. 64:ff9b:1::/48, è locale)
+  if (g[0] === 0x2002) return v4(g[1], g[2]);                              // 6to4
+  if (g[0] === 0x2001 && g[1] === 0) return true;                          // Teredo
+  if (g[0] === 0x2001 && g[1] === 0xdb8) return true;                      // documentazione
+  if (g[0] === 0x100 && g[1] === 0 && g[2] === 0 && g[3] === 0) return true; // 100::/64 scarto
+  if ((g[0] & 0xfe00) === 0xfc00) return true;                             // fc00::/7 unique-local (anche fd00:ec2::254)
+  if ((g[0] & 0xffc0) === 0xfe80 || (g[0] & 0xffc0) === 0xfec0) return true; // link-local e site-local
+  if ((g[0] & 0xff00) === 0xff00) return true;                             // multicast
+  return false;
 }
 
 export type RisolviNome = (host: string) => Promise<string[]>;
-const risolviPredefinito: RisolviNome = async (host) => (await lookup(host, { all: true })).map((r) => r.address);
+const risolviPredefinito: RisolviNome = async (host) => (await lookup(host, { all: true, verbatim: true })).map((r) => r.address);
 
-/** Controlla che l'indirizzo sia https e non punti alla rete interna. Lancia un errore leggibile. */
+async function indirizziAmmessi(host: string, risolvi: RisolviNome): Promise<string[]> {
+  const indirizzi = isIP(host) ? [host] : await risolvi(host);
+  if (!indirizzi.length || indirizzi.some(ipPrivato)) throw new Error("Il link del calendario punta a un indirizzo non ammesso.");
+  return indirizzi;
+}
+
+/** Controlla che l'indirizzo sia https e non punti alla rete interna (tutti gli indirizzi del nome). Lancia un errore leggibile. */
 export async function controllaIndirizzo(url: string, risolvi: RisolviNome = risolviPredefinito): Promise<URL> {
   let u: URL;
   try { u = new URL(url.trim().replace(/^webcal:\/\//i, "https://")); } catch { throw new Error("Il link del calendario non è valido."); }
   if (u.protocol !== "https:") throw new Error("Il link del calendario deve iniziare con https:// o webcal://.");
   if (u.username || u.password) throw new Error("Il link non deve contenere nome utente o password.");
   if (u.port && u.port !== "443") throw new Error("Porta non ammessa nel link del calendario.");
-  const host = u.hostname.replace(/^\[|\]$/g, "");
-  const indirizzi = isIP(host) ? [host] : await risolvi(host);
-  if (!indirizzi.length || indirizzi.some(ipPrivato)) throw new Error("Il link del calendario punta a un indirizzo non ammesso.");
+  await indirizziAmmessi(u.hostname.replace(/^\[|\]$/g, ""), risolvi);
   return u;
 }
 
+type CallbackLookup = (err: NodeJS.ErrnoException | null, indirizzo: string | LookupAddress[], famiglia?: number) => void;
+
+/**
+ * Funzione `lookup` per l'agente https: risolve il nome al momento della connessione, ricontrolla
+ * TUTTI gli indirizzi e restituisce solo quelli verificati. Così il server si collega esattamente
+ * all'indirizzo controllato (niente DNS rebinding tra controllo e scaricamento).
+ */
+export function creaLookupSicuro(risolvi: RisolviNome = risolviPredefinito) {
+  return (host: string, opzioni: { all?: boolean } | number | undefined, cb: CallbackLookup): void => {
+    indirizziAmmessi(host, risolvi).then(
+      (indirizzi) => {
+        if (typeof opzioni === "object" && opzioni?.all) cb(null, indirizzi.map((address) => ({ address, family: isIP(address) })));
+        else cb(null, indirizzi[0], isIP(indirizzi[0]));
+      },
+      (e: Error) => cb(Object.assign(e, { code: "ENOTFOUND" }), ""),
+    );
+  };
+}
+
+const SENZA_CORPO = new Set([101, 204, 205, 304]);
+
+/** GET https senza seguire i reindirizzamenti, collegandosi solo a indirizzi verificati. */
+function richiestaSicura(url: URL, risolvi: RisolviNome): Promise<Response> {
+  return new Promise((ok, ko) => {
+    const req = httpsGet(url, {
+      lookup: creaLookupSicuro(risolvi) as never,
+      headers: { Accept: "text/calendar", "User-Agent": "Jarvis-calendario" },
+      timeout: 12_000,
+      signal: AbortSignal.timeout(12_000),
+    }, (res) => {
+      const intestazioni = new Headers();
+      for (const [k, v] of Object.entries(res.headers)) if (v !== undefined) intestazioni.set(k, Array.isArray(v) ? v.join(", ") : String(v));
+      const stato = res.statusCode ?? 502;
+      const corpo = SENZA_CORPO.has(stato) ? null : (Readable.toWeb(res) as ReadableStream<Uint8Array>);
+      if (!corpo) res.resume();
+      ok(new Response(corpo, { status: stato, headers: intestazioni }));
+    });
+    req.on("timeout", () => req.destroy(new Error("Il calendario non ha risposto in tempo.")));
+    req.on("error", (e) => ko(/non ammesso|tempo/.test(e.message) ? e : new Error("Il calendario non è raggiungibile.")));
+  });
+}
+
+const MAX_REINDIRIZZAMENTI = 3;
 const cache = new Map<string, { quando: number; eventi: EventoIcs[] }>();
 
 export async function scaricaCalendario(url: string, opz: { maxEtaMs?: number; fetchFn?: typeof fetch; risolvi?: RisolviNome } = {}): Promise<EventoIcs[]> {
   const maxEta = opz.maxEtaMs ?? 5 * 60_000;
   const c = cache.get(url);
   if (c && Date.now() - c.quando < maxEta) return c.eventi;
-  const f = opz.fetchFn ?? fetch;
-  let indirizzo = await controllaIndirizzo(url, opz.risolvi);
-  let r: Response | null = null;
-  for (let salti = 0; salti < 4; salti++) {
-    r = await f(indirizzo, { redirect: "manual", signal: AbortSignal.timeout(12_000), headers: { Accept: "text/calendar" } });
-    if (r.status >= 300 && r.status < 400 && r.headers.get("location")) {
-      indirizzo = await controllaIndirizzo(new URL(r.headers.get("location")!, indirizzo).toString(), opz.risolvi);
-      continue;
-    }
-    break;
+  const risolvi = opz.risolvi ?? risolviPredefinito;
+  // fetchFn serve solo ai test (servizi finti); in produzione si usa sempre la richiesta sicura.
+  const scarica = (u: URL) => (opz.fetchFn
+    ? opz.fetchFn(u, { redirect: "manual", signal: AbortSignal.timeout(12_000), headers: { Accept: "text/calendar" } })
+    : richiestaSicura(u, risolvi));
+  let indirizzo = await controllaIndirizzo(url, risolvi);
+  let r = await scarica(indirizzo);
+  for (let salti = 0; r.status >= 300 && r.status < 400 && r.headers.get("location"); salti++) {
+    if (salti >= MAX_REINDIRIZZAMENTI) throw new Error("Il calendario fa troppi reindirizzamenti.");
+    indirizzo = await controllaIndirizzo(new URL(r.headers.get("location")!, indirizzo).toString(), risolvi);
+    r = await scarica(indirizzo);
   }
-  if (!r || !r.ok) throw new Error(`Il calendario ha risposto ${r?.status ?? "?"}.`);
+  if (!r.ok) throw new Error(`Il calendario ha risposto ${r.status}.`);
   const dichiarata = Number(r.headers.get("content-length") || 0);
   if (dichiarata > MAX_BYTE) throw new Error("Il calendario è troppo grande.");
   const testo = await leggiConLimite(r, MAX_BYTE);

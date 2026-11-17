@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { analizzaIcs, occorrenze, controllaIndirizzo, scaricaCalendario, ipPrivato } from "../src/calendario.js";
+import { analizzaIcs, occorrenze, controllaIndirizzo, scaricaCalendario, ipPrivato, creaLookupSicuro } from "../src/calendario.js";
 
 const ICS = `BEGIN:VCALENDAR
 BEGIN:VEVENT
@@ -64,4 +64,37 @@ test("iCal: solo https, niente indirizzi interni (SSRF), limite di dimensione", 
   await assert.rejects(scaricaCalendario("https://pubblico.example/grande.ics", { fetchFn: enorme, risolvi, maxEtaMs: 0 }), /troppo grande/);
   const buono = (async () => new Response(ICS)) as unknown as typeof fetch;
   assert.equal((await scaricaCalendario("https://pubblico.example/buono.ics", { fetchFn: buono, risolvi, maxEtaMs: 0 })).length, 3);
+});
+
+test("iCal (SSRF): IPv6 che nascondono indirizzi interni, nomi con più indirizzi, metadati", async () => {
+  const pubblico = async () => ["93.184.216.34"];
+  for (const u of [
+    "https://[::ffff:127.0.0.1]/a.ics", "https://[::ffff:169.254.169.254]/", "https://[::127.0.0.1]/", "https://[64:ff9b::a9fe:a9fe]/",
+    "https://[2002:7f00:1::]/", "https://0x7f.1/", "https://2130706433/", "https://127.1/", "https://[fd00:ec2::254]/", "https://[fe80::1]/",
+    "https://[ff02::1]/", "https://100.100.100.200/", "https://[::]/", "https://0.0.0.0/", "https://[2001:0::1]/",
+  ]) await assert.rejects(controllaIndirizzo(u, pubblico), /non ammesso/, u);
+  for (const ip of ["8.8.8.8", "2606:4700::1111", "64:ff9b::808:808", "2002:808:808::"]) assert.ok(!ipPrivato(ip), ip);
+  assert.ok(ipPrivato("non-un-indirizzo"), "ciò che non si legge è bloccato");
+  // basta UN indirizzo interno tra quelli del nome per bloccare
+  await assert.rejects(controllaIndirizzo("https://misto.example/a.ics", async () => ["93.184.216.34", "10.0.0.1"]), /non ammesso/);
+});
+
+test("iCal (SSRF): ricontrollo al momento della connessione (DNS rebinding) e al massimo 3 reindirizzamenti", async () => {
+  // il lookup dell'agente https restituisce solo indirizzi verificati
+  const pubblico = creaLookupSicuro(async () => ["93.184.216.34", "2606:4700::1111"]);
+  const tutti = await new Promise<unknown>((ok, ko) => pubblico("x.example", { all: true }, (e, a) => (e ? ko(e) : ok(a))));
+  assert.deepEqual(tutti, [{ address: "93.184.216.34", family: 4 }, { address: "2606:4700::1111", family: 6 }]);
+  const interno = creaLookupSicuro(async () => ["127.0.0.1"]);
+  await assert.rejects(new Promise((ok, ko) => interno("x.example", {}, (e, a) => (e ? ko(e) : ok(a)))), /non ammesso/);
+
+  // il nome è pubblico al controllo ma diventa interno alla connessione: lo scaricamento si ferma
+  let volte = 0;
+  const cambia = async () => (volte++ === 0 ? ["93.184.216.34"] : ["127.0.0.1"]);
+  await assert.rejects(scaricaCalendario("https://rebinding.example/c.ics", { risolvi: cambia, maxEtaMs: 0 }), /non ammesso/);
+  assert.equal(volte, 2, "il nome è stato risolto di nuovo al momento della connessione");
+
+  let salti = 0;
+  const giro = (async () => new Response("", { status: 302, headers: { location: `https://pubblico.example/${++salti}` } })) as unknown as typeof fetch;
+  await assert.rejects(scaricaCalendario("https://pubblico.example/c.ics", { fetchFn: giro, risolvi: async () => ["93.184.216.34"], maxEtaMs: 0 }), /troppi reindirizzamenti/);
+  assert.equal(salti, 4, "la richiesta iniziale e 3 reindirizzamenti, poi stop");
 });
