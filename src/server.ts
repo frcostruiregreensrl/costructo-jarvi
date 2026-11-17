@@ -16,6 +16,13 @@ if (config.produzione && !config.origineAmmessa.every((o) => o.startsWith("https
   console.error("In produzione JARVIS_ORIGINE deve contenere solo indirizzi https.");
   process.exit(1);
 }
+if (config.produzione && !config.fidatiProxy) {
+  console.warn(
+    "ATTENZIONE: JARVIS_PROXY non è impostato. Su Railway tutte le richieste arrivano dal proxy e sembrano venire " +
+    "dallo stesso indirizzo: il limite di tentativi per IP varrebbe per tutti insieme. Imposta JARVIS_PROXY=1 " +
+    "(il server si fiderà di un solo proxy, quello di Railway).",
+  );
+}
 const cifratore = creaCifratore(config.chiaveCifratura);
 const db = apriDb(config.fileDb);
 const invia = creaInvio({ pubblica: config.vapidPubblica, privata: config.vapidPrivata, contatto: config.vapidContatto });

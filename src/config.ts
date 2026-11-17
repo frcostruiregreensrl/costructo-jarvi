@@ -10,6 +10,8 @@ export interface Config {
   origineAmmessa: string[];
   /** true in produzione: cookie "secure" obbligatorio. */
   produzione: boolean;
+  /** JARVIS_PROXY=1: il server sta dietro UN proxy (Railway) e ne legge l'IP vero del visitatore. */
+  fidatiProxy: boolean;
   /** Chiave (32 byte, base64 o hex) per cifrare i segreti salvati nel database. */
   chiaveCifratura: string;
   fusoOrario: string;
@@ -37,6 +39,7 @@ export function leggiConfig(env: NodeJS.ProcessEnv = process.env): Config {
       .map((s) => s.trim().replace(/\/$/, ""))
       .filter(Boolean),
     produzione,
+    fidatiProxy: env.JARVIS_PROXY === "1",
     chiaveCifratura: env.JARVIS_CHIAVE_CIFRATURA || "",
     fusoOrario: env.JARVIS_FUSO || "Europe/Rome",
     modelloPredefinito: env.JARVIS_MODELLO || "claude-haiku-5-5",

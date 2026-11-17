@@ -11,7 +11,7 @@ import type { Cifratore } from "./sicurezza/cifra.js";
 import type { Cervello } from "./cervello/tipi.js";
 import { caricaCervelloAnthropic } from "./cervello/carica.js";
 import { creaSessione, sessioneValida, chiudiSessione, nomeCookie, intestazioneCookie, leggiCookie, DURATA_SESSIONE_MS } from "./sicurezza/sessioni.js";
-import { bloccatoPer, registraErrore, azzera, REGOLA_ACCESSO_IP, REGOLA_ACCESSO_GLOBALE } from "./sicurezza/limiti.js";
+import { bloccatoPer, registraErrore, azzera, ritardoAccesso, REGOLA_ACCESSO_IP, REGOLA_ACCESSO_GLOBALE, CHIAVE_GLOBALE } from "./sicurezza/limiti.js";
 import { utenteEsiste, verificaAccesso, nomeUtente } from "./sicurezza/utente.js";
 import { registra, leggiRegistro } from "./registro.js";
 import { leggiImpostazioni, salvaImpostazioni, salvaSegreto, leggiSegreto, maschera } from "./impostazioni.js";
@@ -46,7 +46,8 @@ export function creaApp(o: OpzioniApp) {
   const { config, db, cifratore } = o;
   const app = express();
   app.disable("x-powered-by");
-  if (process.env.JARVIS_PROXY === "1") app.set("trust proxy", 1);
+  // Dietro Railway: ci si fida di UN solo proxy (quello di Railway) per leggere l'IP vero del visitatore.
+  if (config.fidatiProxy) app.set("trust proxy", 1);
   const pubblica = o.cartellaPubblica ?? resolve(qui, existsSync(resolve(qui, "../public")) ? "../public" : "public");
   const cookie = nomeCookie(config.produzione);
   const hostAmmessi = () => new Set(config.origineAmmessa.map((u) => new URL(u).host));
@@ -102,17 +103,20 @@ export function creaApp(o: OpzioniApp) {
   });
 
   const SchemaAccesso = z.object({ password: z.string().min(1).max(200), codice: z.string().regex(/^\d{6}$/) });
-  app.post("/api/accesso", (req, res) => {
+  app.post("/api/accesso", async (req, res) => {
     const chiaveIp = `accesso:ip:${ip(req)}`;
-    const attesa = Math.max(bloccatoPer(db, chiaveIp), bloccatoPer(db, "accesso:tutti"));
+    const attesa = bloccatoPer(db, chiaveIp);
     if (attesa > 0) {
       registra(db, "accesso", "negato", "sistema", { motivo: "troppi tentativi", ip: ip(req) });
       return res.status(429).json({ errore: `Troppi tentativi. Riprova tra ${Math.ceil(attesa / 60_000)} minuti.` });
     }
+    // Molti errori in totale: si rallenta ogni tentativo, ma non si blocca nessuno.
+    const ritardo = ritardoAccesso(db);
+    if (ritardo > 0) await new Promise((r) => setTimeout(r, ritardo));
     const dati = SchemaAccesso.safeParse(req.body);
     if (!dati.success || !verificaAccesso(db, cifratore, dati.data.password, dati.data.codice)) {
       registraErrore(db, chiaveIp, REGOLA_ACCESSO_IP);
-      registraErrore(db, "accesso:tutti", REGOLA_ACCESSO_GLOBALE);
+      registraErrore(db, CHIAVE_GLOBALE, REGOLA_ACCESSO_GLOBALE);
       registra(db, "accesso", "negato", "sistema", { motivo: "credenziali errate", ip: ip(req) });
       return res.status(401).json({ errore: "Password o codice non corretti." });
     }
