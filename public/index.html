@@ -76,6 +76,7 @@
       <a href="#home">Home</a>
       <a href="#posta">Posta</a>
       <a href="#whatsapp">WhatsApp</a>
+      <a href="#proposte">Proposte</a>
       <a href="#memoria">Cosa sa di me</a>
       <a href="#registro">Cosa ha fatto</a>
       <a href="#spesa">Spesa del mese</a>
@@ -106,6 +107,15 @@
           </div>
           <ol id="adesso" class="lista-adesso"><li class="vuoto">Caricamento…</li></ol>
           <p id="avvisiBriefing" class="avvisi"></p>
+        </section>
+
+        <!-- Fase 3b: per oggi, azienda per azienda (chi aspetta, promesse, solleciti, preventivi, appuntamenti di domani, cantieri) -->
+        <section class="riquadro per-oggi" aria-labelledby="titoloPerOggi">
+          <div class="riquadro-testa">
+            <h2 id="titoloPerOggi">Per oggi, azienda per azienda</h2>
+            <a href="#proposte">Proposte</a>
+          </div>
+          <div id="perOggi" aria-live="polite"><p class="vuoto">Caricamento…</p></div>
         </section>
 
         <section id="dialogo" class="dialogo" aria-live="polite" aria-label="Conversazione"></section>
@@ -160,6 +170,53 @@
         <p id="waStato" class="esito" role="status" aria-live="polite"></p>
         <div id="waDomande" class="wa-domande" aria-live="polite"></div>
         <div id="waGruppi" class="posta-gruppi" aria-live="polite"></div>
+      </section>
+
+      <!-- PROPOSTE (Fase 3b) -->
+      <section id="pagina-proposte" class="pagina" hidden aria-labelledby="titoloProposte">
+        <h1 id="titoloProposte">Proposte</h1>
+        <p class="sotto">Quello che arriva su WhatsApp diventa una <b>proposta</b> per Costructo. Jarvis non scrive mai niente di definitivo: controlli il testo completo, confermi qui, e poi la approvi in Costructo. Le cose private restano nell'agenda di Jarvis e non vanno mai in Costructo.</p>
+        <div class="schede" role="tablist" aria-label="Quali proposte">
+          <button role="tab" data-vista="privato" aria-selected="false">Privato</button>
+          <button role="tab" data-vista="lavoro" aria-selected="false">Lavoro</button>
+          <button role="tab" data-vista="tutto" aria-selected="true">Tutto</button>
+        </div>
+        <div class="riga-filtri">
+          <button id="propAggiornaStati" type="button" class="secondario">Aggiorna gli stati da Costructo</button>
+          <button id="propMandaScelte" type="button" class="primario" disabled>Manda le proposte scelte</button>
+        </div>
+        <p id="propStato" class="esito" role="status" aria-live="polite"></p>
+        <div id="propConfermaLotto"></div>
+        <section id="propSezioneDomande" aria-labelledby="titoloDomandeOperai" hidden>
+          <h2 id="titoloDomandeOperai" class="sottotitolo">Chi è questo contatto?</h2>
+          <div id="propDomande" class="wa-domande" aria-live="polite"></div>
+        </section>
+        <div id="propGruppi" class="posta-gruppi" aria-live="polite"></div>
+
+        <section class="riquadro" aria-labelledby="titoloCerca">
+          <h2 id="titoloCerca">Cerca ovunque</h2>
+          <p class="aiuto">Cerca nei messaggi WhatsApp e nelle mail salvati (ultimi 30 giorni) e in Costructo, nella scheda aperta. Il privato solo se lo chiedi.</p>
+          <form id="formCerca" class="riga-form" role="search">
+            <label class="nascosto" for="cercaTesto">Cosa cerchi</label>
+            <input id="cercaTesto" maxlength="200" placeholder="Per esempio: bagno Rossi" required>
+            <button class="primario" type="submit">Cerca</button>
+          </form>
+          <label class="spunta" id="rigaCercaPrivato"><input id="cercaPrivato" type="checkbox"> Cerca anche nelle cose private</label>
+          <p id="cercaStato" class="esito" role="status" aria-live="polite"></p>
+          <ul id="cercaRisultati" class="lista-posta"></ul>
+        </section>
+
+        <section class="riquadro" aria-labelledby="titoloRubrica">
+          <h2 id="titoloRubrica">Rubrica: numeri che Costructo non conosce</h2>
+          <p class="aiuto">I contatti WhatsApp di ogni azienda confrontati con le controparti di Costructo. Puoi proporre a Costructo di aggiungere il numero alla controparte giusta.</p>
+          <div id="propRubrica" aria-live="polite"></div>
+        </section>
+
+        <section class="riquadro" aria-labelledby="titoloScontrini">
+          <h2 id="titoloScontrini">Scontrini (solo in Jarvis)</h2>
+          <p class="avviso-forte">Gli scontrini arrivati su WhatsApp restano qui: la Prima Nota di Costructo è esclusa finché non decidi tu.</p>
+          <ul id="propScontrini" class="lista-posta"></ul>
+        </section>
       </section>
 
       <!-- MEMORIA -->
@@ -402,6 +459,45 @@
             <label class="spunta"><input id="waNascondi" type="checkbox"> Nascondi il contenuto nelle notifiche (niente nome del contatto: solo l'azienda e «messaggio urgente»)</label>
             <p class="aiuto">Nelle notifiche non c'è mai il testo dei messaggi né il numero di telefono.</p>
             <p id="esitoWaOpzioni" class="esito" role="status" aria-live="polite"></p>
+          </fieldset>
+        </form>
+
+        <!-- FUNZIONI WHATSAPP (Fase 3b) -->
+        <form id="formFunzioni" class="modulo" autocomplete="off">
+          <fieldset>
+            <legend>Funzioni WhatsApp e proposte per Costructo</legend>
+            <p class="aiuto">Jarvis prepara proposte per Costructo (ore, foto, documenti, consegne, appuntamenti…): partono solo quando le confermi, e restano bozze da approvare in Costructo. Tutto spento di serie.</p>
+            <label class="spunta"><input id="funScarica" type="checkbox"> Scarica foto e PDF dei contatti delle aziende (servono per le proposte con allegati e per i vocali)</label>
+            <label>Trascrizione dei vocali
+              <select id="funTrascrizione">
+                <option value="nessuno">Spenta</option>
+                <option value="google">Google Speech-to-Text</option>
+                <option value="openai">OpenAI</option>
+              </select>
+            </label>
+            <p id="funCosti" class="aiuto"></p>
+            <label>Chiave di Google (Speech-to-Text)
+              <input id="funChiaveGoogle" type="password" maxlength="400" autocomplete="new-password" placeholder="lascia vuoto per non cambiarla" aria-describedby="funChiaveGoogleStato">
+            </label>
+            <p id="funChiaveGoogleStato" class="aiuto">Impostata: no.</p>
+            <label>Chiave di OpenAI
+              <input id="funChiaveOpenai" type="password" maxlength="400" autocomplete="new-password" placeholder="lascia vuoto per non cambiarla" aria-describedby="funChiaveOpenaiStato">
+            </label>
+            <p id="funChiaveOpenaiStato" class="aiuto">Impostata: no.</p>
+            <h3 class="sottotitolo" id="titoloAutomatiche">Proponi in automatico (senza chiedere)</h3>
+            <p class="avviso-forte">Spenti di serie. Acceso, Jarvis manda a Costructo le proposte di quel tipo senza chiederti la conferma: restano comunque bozze da approvare in Costructo.</p>
+            <div id="funAutomatiche" class="lista-spunte" role="group" aria-labelledby="titoloAutomatiche"></div>
+            <label>Ricordami i preventivi senza risposta dopo (giorni)
+              <input id="funGiorni" type="number" min="1" max="90" required>
+            </label>
+            <label class="spunta"><input id="funModelli" type="checkbox"> Promemoria ai clienti con i modelli approvati da Meta (parte 2: sempre con la tua conferma)</label>
+            <h3 class="sottotitolo" id="titoloEscluse">Chat private escluse (niente promemoria, compleanni o vocali)</h3>
+            <ul id="funEscluse" class="lista-aziende" aria-labelledby="titoloEscluse"></ul>
+            <h3 class="sottotitolo" id="titoloOperaiWa">Contatti che sono operai</h3>
+            <ul id="funOperai" class="lista-aziende" aria-labelledby="titoloOperaiWa"></ul>
+            <p class="aiuto">Jarvis non usa mai la posizione degli operai.</p>
+            <p id="esitoFunzioni" class="esito" role="status" aria-live="polite"></p>
+            <button class="primario" type="submit">Salva</button>
           </fieldset>
         </form>
 

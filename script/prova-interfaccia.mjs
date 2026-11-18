@@ -71,7 +71,7 @@ try {
       controlla(`${nome}: nessuno scorrimento orizzontale`, sbordo <= 0, `${sbordo}px`);
       await pagina.screenshot({ path: `${cartella}/home-${nome}.png`, fullPage: larghezza === 390 });
 
-      for (const p of ["posta", "whatsapp", "memoria", "registro", "spesa", "impostazioni"]) {
+      for (const p of ["posta", "whatsapp", "proposte", "memoria", "registro", "spesa", "impostazioni"]) {
         await pagina.evaluate((h) => { location.hash = h; }, p);
         await pagina.waitForTimeout(400);
         const sb = await pagina.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -79,6 +79,16 @@ try {
         await pagina.screenshot({ path: `${cartella}/${p}-${nome}.png`, fullPage: true });
       }
       if (larghezza === 390 && tema === "light") {
+        await pagina.evaluate(() => { location.hash = "memoria"; });
+        await pagina.waitForSelector("#listaMemorie li");
+        // Fase 3b: «Per oggi» azienda per azienda, con i testi pronti da mandare dal telefono (wa.me, mai da Jarvis)
+        await pagina.evaluate(() => { location.hash = "home"; });
+        await pagina.waitForSelector("#perOggi .azienda-oggi");
+        controlla("Per oggi: sezioni per azienda", (await pagina.locator("#perOggi .azienda-oggi h3").allTextContents()).some((t) => t.startsWith("Impresa Prova (finta)")));
+        const linkWa = pagina.locator('#perOggi a[href^="https://wa.me/393330000199?text="]');
+        controlla("Per oggi: sollecito, preventivo e promemoria con link wa.me (li mandi tu)", (await linkWa.count()) === 3 && /Apri WhatsApp con il testo/.test(await linkWa.first().textContent()));
+        controlla("Per oggi: importo esatto di Costructo nel sollecito", /4\.200,00 €/.test(await pagina.textContent("#perOggi")));
+        await pagina.locator("#perOggi").screenshot({ path: `${cartella}/per-oggi-${nome}.png` });
         await pagina.evaluate(() => { location.hash = "memoria"; });
         await pagina.waitForSelector("#listaMemorie li");
         controlla("memorie visibili e divise", (await pagina.locator("#listaMemorie li.lavoro").count()) === 1 && (await pagina.locator("#listaMemorie li.privato").count()) === 2);
@@ -112,6 +122,7 @@ try {
         await pagina.screenshot({ path: `${cartella}/whatsapp-elenco-${nome}.png`, fullPage: true });
         await pagina.locator(".wa-chat.urgente button", { hasText: "Apri" }).click();
         await pagina.waitForSelector(".wa-messaggi .wa-msg");
+        controlla("WhatsApp: «Proponi in Costructo» su ogni messaggio", (await pagina.locator(".wa-chat.urgente .proponi-messaggio button", { hasText: "Proponi in Costructo" }).count()) >= 1);
         await pagina.locator(".wa-chat.urgente button", { hasText: "Prepara risposta" }).click();
         await pagina.waitForSelector(".wa-chat.urgente .zona-bozza .testo-bozza");
         controlla("WhatsApp: risposta proposta e modificabile", ((await pagina.inputValue(".wa-chat.urgente .zona-bozza .testo-bozza")) || "").includes("[da completare]"));
@@ -131,6 +142,45 @@ try {
         await pagina.locator(".wa-domanda button", { hasText: "Privato" }).click();
         await pagina.waitForFunction(() => !document.querySelector(".wa-domanda"));
         controlla("WhatsApp: risposta alla domanda ricordata", (await pagina.locator("#waGruppi .gruppo-wa h2", { hasText: "Da assegnare" }).count()) === 0);
+        // Proposte (Fase 3b): testo completo, conferma esplicita, incomplete bloccate, privato separato, «Chi è questo contatto?»
+        await pagina.evaluate(() => { location.hash = "proposte"; });
+        await pagina.waitForSelector("#propGruppi .proposta");
+        const gruppiProp = await pagina.locator("#propGruppi .gruppo-proposte h2").allTextContents();
+        controlla("Proposte: gruppi «Da confermare» e «Mandate»", gruppiProp.some((g) => g.startsWith("Da confermare (5)")) && gruppiProp.some((g) => g.startsWith("Mandate (1)")), gruppiProp.join(" | "));
+        controlla("Proposte: testo completo visibile", /Proposta per Costructo · Impresa Prova \(finta\)\nTipo: Ore \(rapportino\)/.test(await pagina.locator(".proposta .testo-completo").first().textContent()));
+        const durc = pagina.locator(".proposta", { hasText: "DURC di Idraulica Prova" });
+        controlla("Proposte: incompleta non si manda", await durc.locator("button", { hasText: "Manda a Costructo" }).isDisabled() && /Da completare prima di confermare: Nuova scadenza/.test(await durc.textContent()));
+        controlla("Proposte: «Chi è questo contatto: operaio…?» con i pulsanti", (await pagina.locator("#propDomande .domanda-operaio button").count()) === 3);
+        controlla("Proposte: scontrino solo in Jarvis (Prima Nota esclusa)", (await pagina.locator("#propScontrini li").count()) === 1 && /Prima Nota/.test(await pagina.textContent("#pagina-proposte")));
+        await pagina.screenshot({ path: `${cartella}/proposte-elenco-${nome}.png`, fullPage: true });
+        const ore = pagina.locator(".proposta", { hasText: "Ore di Mario Rossi" });
+        await ore.locator("button", { hasText: "Manda a Costructo" }).click();
+        await pagina.waitForSelector(".conferma-proposte");
+        controlla("Proposte: la conferma mostra di nuovo tutto il testo", /Mando questa proposta a Costructo\?/.test(await pagina.textContent(".conferma-proposte")) && /Operaio: O1 \(Mario Rossi \(finto\)\)/.test(await pagina.textContent(".conferma-proposte .testo-completo")));
+        await pagina.screenshot({ path: `${cartella}/proposte-conferma-${nome}.png`, fullPage: true });
+        await pagina.locator(".conferma-proposte button", { hasText: "Sì, manda" }).click();
+        await pagina.waitForFunction(() => /mandata a Costructo/.test(document.querySelector("#pagina-proposte")?.textContent || ""));
+        controlla("Proposte: mandata dopo il «Sì, manda»", true);
+        await pagina.waitForTimeout(1800);
+        const richiesta = pagina.locator(".proposta", { hasText: "Paola" });
+        await richiesta.locator("button", { hasText: "Manda a Costructo" }).click();
+        await pagina.locator(".conferma-proposte button", { hasText: "Sì, manda" }).click();
+        await pagina.waitForFunction(() => /In attesa della pagina Proposte in Costructo/.test(document.querySelector("#pagina-proposte")?.textContent || ""));
+        controlla("Proposte: senza la pagina in Costructo resta in Jarvis («In attesa della pagina Proposte»)", true);
+        await pagina.waitForTimeout(1800);
+        await pagina.locator("#pagina-proposte [data-vista=lavoro]").click();
+        await pagina.waitForTimeout(500);
+        controlla("Proposte: nella scheda Lavoro niente privato", (await pagina.locator(".proposta", { hasText: "Compleanno di Marco" }).count()) === 0);
+        await pagina.locator("#pagina-proposte [data-vista=tutto]").click();
+        await pagina.waitForTimeout(500);
+        controlla("Proposte: nella scheda Tutto anche il promemoria privato", (await pagina.locator(".proposta.privato", { hasText: "Compleanno di Marco" }).count()) === 1);
+        await pagina.fill("#cercaTesto", "betoniera");
+        await pagina.click("#formCerca button[type=submit]");
+        await pagina.waitForSelector("#cercaRisultati li");
+        controlla("Ricerca unica: trova il messaggio WhatsApp con l'azienda", /Impresa Prova \(finta\)/.test(await pagina.textContent("#cercaRisultati")));
+        const sbProp = await pagina.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        controlla("Proposte senza scorrimento orizzontale", sbProp <= 0, `${sbProp}px`);
+        await pagina.screenshot({ path: `${cartella}/proposte-dopo-${nome}.png`, fullPage: true });
         // Impostazioni: caselle, preset e calendario Apple
         await pagina.evaluate(() => { location.hash = "impostazioni"; });
         await pagina.waitForSelector("#listaCaselle li:not(.vuoto)");
@@ -145,6 +195,11 @@ try {
         await pagina.selectOption("#waProvider", "bsp");
         controlla("WhatsApp: campi del fornitore", await pagina.locator("#waBase").isVisible() && !(await pagina.locator("#waVersione").isVisible()));
         await pagina.locator("#formWhatsapp").screenshot({ path: `${cartella}/impostazioni-whatsapp-${nome}.png` });
+        await pagina.waitForSelector("#funAutomatiche input");
+        controlla("Funzioni: trascrizione spenta, scaricamento spento, invii automatici spenti di serie", (await pagina.inputValue("#funTrascrizione")) === "nessuno" && !(await pagina.isChecked("#funScarica"))
+          && (await pagina.locator("#funAutomatiche input").count()) === 10 && (await pagina.locator("#funAutomatiche input:checked").count()) === 0 && !(await pagina.isChecked("#funModelli")));
+        controlla("Funzioni: costi della trascrizione mostrati", /al minuto/.test(await pagina.textContent("#funCosti")));
+        await pagina.locator("#formFunzioni").screenshot({ path: `${cartella}/impostazioni-funzioni-${nome}.png` });
         await pagina.locator("#formCasella").screenshot({ path: `${cartella}/caselle-altro-${nome}.png` });
         await pagina.evaluate(() => { location.hash = "home"; });
         await pagina.click("#apriMenu");

@@ -296,7 +296,7 @@ code { font-family: var(--mono); background: var(--sfondo-2); padding: 1px 5px; 
 
 /* WhatsApp (Fase 3) */
 .wa-domande { display: grid; gap: 10px; margin: 8px 0 14px; }
-.wa-domanda .azioni { display: flex; flex-wrap: wrap; gap: 8px; }
+.wa-domanda .azioni, .domanda-operaio .azioni { display: flex; flex-wrap: wrap; gap: 8px; }
 .gruppo-wa.da-assegnare h2 { color: var(--ambra); }
 .gruppo-wa.da-assegnare .wa-chat { border-left-color: var(--ambra); border-left-style: dashed; }
 .wa-chat.attesa:not(.urgente) { border-color: var(--ambra); }
@@ -308,12 +308,40 @@ code { font-family: var(--mono); background: var(--sfondo-2); padding: 1px 5px; 
 .wa-msg.out { justify-self: end; background: color-mix(in srgb, var(--petrolio) 10%, var(--carta)); border-color: color-mix(in srgb, var(--petrolio) 35%, var(--bordo)); }
 .wa-msg.urgente { border-color: var(--errore); }
 .wa-msg .posta-meta { display: block; }
-.wa-testo, .wa-anteprima { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.wa-anteprima { background: var(--carta); border: 1px solid var(--bordo); border-radius: 10px; padding: 8px 10px; font-weight: 400; }
+.wa-testo, .wa-anteprima, .anteprima-pronta { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wa-anteprima, .anteprima-pronta { background: var(--carta); border: 1px solid var(--bordo); border-radius: 10px; padding: 8px 10px; font-weight: 400; }
 .wa-azienda { align-items: end; }
 .wa-azienda label { display: grid; gap: 4px; min-width: 0; flex: 1 1 200px; }
 .testo-lungo { overflow-wrap: anywhere; word-break: break-all; }
 #waCampiMeta[hidden], #waCampiBsp[hidden] { display: none !important; }
+
+/* Proposte e funzioni WhatsApp (Fase 3b) */
+.gruppo-proposte h2 { font-size: 18px; margin: 0 0 8px; }
+.voce-elenco { background: var(--carta); border: 1px solid var(--bordo); border-left: 5px solid var(--lavoro); border-radius: 12px; padding: 10px 12px; display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.voce-elenco.privato { border-left-color: var(--privato); }
+.proposta { background: var(--carta); border: 1px solid var(--bordo); border-left: 5px solid var(--lavoro); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; min-width: 0; }
+.proposta.privato { border-left-color: var(--privato); }
+.proposta.incompleta { border-left-style: dashed; }
+.testo-completo { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.45 var(--font); background: var(--sfondo); border: 1px solid var(--bordo); border-radius: 10px; padding: 8px 10px; max-height: 340px; overflow: auto; }
+.conferma-proposte .testo-completo { background: var(--carta); }
+.miniature { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.miniature img { width: 96px; height: 96px; object-fit: cover; border-radius: 8px; border: 1px solid var(--bordo); }
+.etichetta.proposta { border-color: var(--petrolio); color: var(--petrolio); }
+.lista-spunte { display: grid; gap: 4px; }
+.proponi-messaggio { display: grid; gap: 4px; margin-top: 4px; }
+.proponi-messaggio select { max-width: 100%; }
+.per-oggi { display: grid; gap: 10px; }
+#perOggi { display: grid; gap: 12px; }
+.azienda-oggi { border-left: 4px solid var(--lavoro); padding-left: 10px; display: grid; gap: 6px; min-width: 0; }
+.azienda-oggi.privato { border-left-color: var(--privato); }
+.azienda-oggi h3 { margin: 0; font-size: 17px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; overflow-wrap: anywhere; }
+.blocco-oggi h4 { margin: 4px 0; font-size: 15px; color: var(--testo-2); }
+.lista-oggi { margin: 0; padding-left: 18px; display: grid; gap: 6px; overflow-wrap: anywhere; }
+.lista-oggi li.scaduta { color: var(--errore); }
+.testo-pronto { display: grid; gap: 4px; }
+.posta-meta.blocco { display: block; }
+.pulsante-link { display: inline-flex; align-items: center; min-height: 40px; padding: 6px 12px; border-radius: 10px; border: 1px solid var(--petrolio); color: var(--petrolio); text-decoration: none; font-weight: 600; overflow-wrap: anywhere; }
+#rigaCercaPrivato[hidden], #propSezioneDomande[hidden] { display: none !important; }
 
 @media (min-width: 900px) {
   #sfera { width: 220px; height: 220px; }

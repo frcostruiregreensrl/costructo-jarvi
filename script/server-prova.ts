@@ -24,6 +24,8 @@ import { ImapFinto, uscitaFinta } from "../test/postaFinta.js";
 import { elaboraWebhook } from "../src/whatsapp/elabora.js";
 import { creaServizioWhatsapp } from "../src/whatsapp/servizio.js";
 import { ricevuto, eco, PHONE_NUMBER_ID } from "../test/metaFinto.js";
+import { creaProposta } from "../src/proposte/archivio.js";
+import { chiediOperaio } from "../src/funzioni/operai.js";
 
 const PASSWORD = "password-finta-di-prova";
 const SEGRETO = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
@@ -41,7 +43,7 @@ const AZIENDE: Record<string, { azienda: { id: number; nome: string }; briefing:
       cantieri: [{ nome: "Villa Rosa (finto)" }, { nome: "Scuola media (finta)" }, { nome: "Capannone Est (finto)" }],
       scadenze: [{ titolo: "F24 di fine mese (finto)", scadenza: "30/11" }],
       documentiInScadenza: [{ titolo: "DURC impresa (finto)", scadenza: "25/11" }],
-      fattureDaIncassare: [{ cliente: "Cliente Prova Srl", residuo: 4200 }],
+      fattureDaIncassare: [{ cliente: "Cliente Prova Srl", numero: "12", residuo: 4200, scadenza: "2026-10-31" }],
     },
   },
   "Bearer csa_prova_seconda_456": {
@@ -53,9 +55,24 @@ const costructo = createServer((req, res) => {
   const a = AZIENDE[String(req.headers.authorization)];
   if (!a) { res.writeHead(401).end("{}"); return; }
   const p = new URL(req.url || "/", "http://x").pathname;
+  const prima = a.azienda.id === 1;
+  // Fase 3b: la prima azienda finta ha la pagina Proposte; la seconda no (si vede «In attesa della pagina Proposte»).
+  if (p === "/api/assistente/v1/proposte" && req.method === "POST") {
+    req.resume();
+    res.writeHead(prima ? 201 : 404, { "Content-Type": "application/json" }).end(JSON.stringify(prima ? { id: `P${Date.now()}`, stato: "in_attesa" } : {}));
+    return;
+  }
+  const domani = new Date(Date.now() + 864e5); domani.setHours(10, 0, 0, 0);
   const dati: Record<string, unknown> = {
     "/api/assistente/v1/briefing": a.briefing,
     "/api/assistente/v1/io": { versione: 1, token: { id: 1, etichetta: "Jarvis (finto)" }, azienda: a.azienda },
+    ...(prima ? {
+      "/api/assistente/v1/cantieri": { cantieri: [{ id: "C1", nome: "Villa Rosa (finto)", lat: 45.0, lon: 9.0 }, { id: "C2", nome: "Scuola media (finta)" }] },
+      "/api/assistente/v1/operai": { operai: [{ id: "O1", nome: "Mario", cognome: "Rossi (finto)", attivo: true }, { id: "O2", nome: "Gino", cognome: "Neri (finto)", attivo: true }] },
+      "/api/assistente/v1/controparti": { controparti: [{ id: "K1", nome: "Cliente Prova Srl", telefono: "+39 333 000 0199" }] },
+      "/api/assistente/v1/preventivi": { preventivi: [{ numero: "P7", cliente: "Cliente Prova Srl", stato: "inviato", dataInvio: new Date(Date.now() - 12 * 864e5).toISOString().slice(0, 10) }] },
+      "/api/assistente/v1/agenda": { impegni: [{ titolo: "Sopralluogo (finto)", inizio: domani.toISOString(), cliente: "Cliente Prova Srl", luogo: "Villa Rosa (finto)" }] },
+    } : {}),
   };
   res.writeHead(dati[p] ? 200 : 404, { "Content-Type": "application/json" }).end(JSON.stringify(dati[p] ?? {}));
 });
@@ -133,6 +150,17 @@ for (const c of chat) elaboraWebhook(db, ricevuto({ da: c.da, nome: c.nome, test
 elaboraWebhook(db, eco({ a: "393330000103", testo: "Sì, perfetto! (finto)", quando: adesso - 5 * 60_000 }), PHONE_NUMBER_ID, adesso - 5 * 60_000);
 for (const c of chat) if (c.spazio) db.prepare("UPDATE wa_contatti SET spazio = ?, fonte_spazio = 'luigi' WHERE wa_id = ?").run(c.spazio, c.da);
 await creaServizioWhatsapp({ ...servizi.whatsapp.dip, ora: () => Date.now() }).giroOra();
+
+// Fase 3b: proposte finte (nessun dato reale). Una completa per ogni tipo principale, una incompleta, una privata, una già mandata.
+const capocantiere = db.prepare("SELECT id FROM wa_contatti WHERE wa_id = '393330000101'").get() as { id: string };
+creaProposta(db, { tipo: "ore", aziendaId: prima.id, chiave: "prova:ore:1", titolo: "Ore di Mario Rossi (finto): 8 oggi (Villa Rosa)", dati: { operaioId: "O1", cantiereId: "C1", data: oggi, ore: 8, descrizione: "Ore mandate su WhatsApp" }, nomi: { operaioId: "Mario Rossi (finto)", cantiereId: "Villa Rosa (finto)" }, contattoId: capocantiere.id });
+creaProposta(db, { tipo: "rinnovo_documento", aziendaId: prima.id, chiave: "prova:durc:1", titolo: "DURC di Idraulica Prova (finto)", dati: { ditta: "Idraulica Prova (finta)", tipoDocumento: "DURC" }, note: ["Scadenza non scritta nel messaggio: inseriscila tu (Jarvis non legge il PDF)."] });
+creaProposta(db, { tipo: "richiesta_lavoro", aziendaId: seconda.id, chiave: "prova:richiesta:1", titolo: "Nuova richiesta di lavoro da Paola (finta)", dati: { nome: "Paola (finta)", telefono: "+393330000777", indirizzo: "via Prova 3", descrizione: "Rifare il bagno (finto)" }, note: ["Jarvis non ha risposto e non risponde con prezzi o impegni."] });
+creaProposta(db, { tipo: "agenda_privata", aziendaId: "privato", chiave: "prova:compleanno:1", titolo: "Compleanno di Marco (finto)", dati: { titolo: "Compleanno di Marco (finto)", data: domani } });
+const mandata = creaProposta(db, { tipo: "agenda", aziendaId: prima.id, chiave: "prova:agenda:1", titolo: "Sopralluogo con Cliente Prova (finto)", dati: { data: domani, ora: "10:00", titolo: "Sopralluogo con Cliente Prova (finto)" } }).proposta;
+db.prepare("UPDATE proposte SET stato = 'inviata', id_costructo = 'P1', stato_costructo = 'accettata', inviata = ? WHERE id = ?").run(Date.now(), mandata.id);
+chiediOperaio(db, capocantiere.id, prima.id);
+db.prepare("INSERT INTO scontrini (id, messaggio_id, contatto_id, spazio, descrizione, creato) VALUES ('s1', 'w-prova', ?, ?, 'Scontrino gasolio (finto)', ?)").run(capocantiere.id, prima.id, Date.now());
 const server = app.listen(Number(process.env.PORTA_PROVA) || 0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
 const porta = (server.address() as AddressInfo).port;
