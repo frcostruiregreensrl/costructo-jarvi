@@ -5,6 +5,7 @@ import type { Db } from "./db.js";
 import type { DefinizioneStrumento } from "./cervello/tipi.js";
 import type { ClientCostructo } from "./costructo.js";
 import { ErroreCostructo } from "./costructo.js";
+import { trovaAziende, nomiAziende, type AziendaCollegata } from "./aziende.js";
 import { marcaDati } from "./dati.js";
 import { aggiungiImpegno, cancellaImpegno, cercaImpegni, descriviImpegno, impegniProssimiGiorni, type Impegno } from "./agenda.js";
 import { aggiungiMemoria, elencaMemorie, type Spazio, type Vista } from "./memorie.js";
@@ -32,7 +33,10 @@ export interface ContestoStrumenti {
   vista: Vista;
   messaggioLuigi: string;
   conversazione: string;
-  costructo: ClientCostructo | null;
+  /** Una sola azienda (compatibilità). Se ci sono `aziende`, vale quell'elenco. */
+  costructo?: ClientCostructo | null;
+  /** Le aziende collegate a Costructo, ognuna con il suo token. */
+  aziende?: AziendaCollegata[];
   linkCalendario: () => string;
   emetti: (e: EventoFlusso) => void;
   fetchFn?: typeof fetch;
@@ -55,44 +59,93 @@ interface Strumento<S extends z.ZodTypeAny> {
 }
 function strumento<S extends z.ZodTypeAny>(s: Strumento<S>): Strumento<S> { return s; }
 
-const vuoto = z.object({}).strict();
+/** Le aziende disponibili in questo turno. */
+export function aziendeDelContesto(c: Pick<ContestoStrumenti, "aziende" | "costructo">): AziendaCollegata[] {
+  if (c.aziende) return c.aziende.filter((a) => a.client.configurato);
+  return c.costructo?.configurato ? [{ id: "principale", nome: "", client: c.costructo }] : [];
+}
 
-async function daCostructo(c: ContestoStrumenti, f: (cl: ClientCostructo) => Promise<{ percorso: string; dati: unknown }>): Promise<string> {
-  if (!c.costructo?.configurato) return "Costructo non è ancora collegato: dillo a Luigi in una frase.";
-  const r = await f(c.costructo);
-  return marcaDati("costructo", { percorso: r.percorso, dati: r.dati });
+/** Parametro facoltativo di tutti gli strumenti costructo_* (stringa vuota = non detto). */
+const azienda = { type: "string", description: "Nome dell'azienda di cui parla Luigi, come lo dice lui. Stringa vuota se non l'ha detto o se vuole tutte le aziende." };
+const campoAzienda = z.string().max(80).optional();
+
+type Lettura = (cl: ClientCostructo) => Promise<{ percorso: string; dati: unknown }>;
+
+/**
+ * Legge Costructo per una o più aziende.
+ * - una sola azienda collegata: si usa quella;
+ * - più aziende e `richiesta` detta: si cerca per nome o id; se non è chiaro, l'AI deve chiedere a Luigi;
+ * - più aziende e niente `richiesta`: si leggono tutte (se `tutte`), ogni dato con il nome della sua azienda;
+ *   l'errore di un'azienda non nasconde i dati delle altre.
+ */
+async function daCostructo(c: ContestoStrumenti, richiesta: string | undefined, f: Lettura, tutte = true): Promise<string> {
+  const aziende = aziendeDelContesto(c);
+  if (!aziende.length) return "Costructo non è ancora collegato: dillo a Luigi in una frase.";
+  const chiedi = (motivo: string) =>
+    `${motivo} Le aziende collegate sono: ${nomiAziende(aziende, "e")}. Non ho letto niente: chiedi a Luigi «Di quale azienda parli: ${nomiAziende(aziende)}?».`;
+  let scelte = aziende;
+  if (aziende.length > 1) {
+    const r = (richiesta ?? "").trim();
+    if (r) {
+      scelte = trovaAziende(aziende, r);
+      if (!scelte.length) return chiedi(`Nessuna azienda collegata corrisponde a «${r.slice(0, 80)}».`);
+      if (scelte.length > 1) return chiedi(`«${r.slice(0, 80)}» può essere più di un'azienda.`);
+    } else if (!tutte) {
+      return chiedi("Non è chiaro di quale azienda parla Luigi.");
+    }
+  }
+  if (scelte.length === 1) {
+    const a = scelte[0];
+    try {
+      const r = await f(a.client);
+      return marcaDati("costructo", { ...(a.nome ? { azienda: a.nome } : {}), percorso: r.percorso, dati: r.dati });
+    } catch (e) {
+      if (aziende.length > 1 && e instanceof Error) throw new ErroreCostructo(`${a.nome}: ${e.message}`, e instanceof ErroreCostructo ? e.codice : "server");
+      throw e;
+    }
+  }
+  const esiti = await Promise.allSettled(scelte.map((a) => f(a.client)));
+  if (esiti.every((e) => e.status === "rejected")) {
+    throw new ErroreCostructo(esiti.map((e, i) => `${scelte[i].nome}: ${((e as PromiseRejectedResult).reason as Error)?.message ?? "errore"}`).join(" "), "server");
+  }
+  return marcaDati("costructo", {
+    nota: "Dati di più aziende: ogni blocco dice di quale azienda è. Di' sempre a quale azienda appartiene ogni informazione e non sommare numeri di aziende diverse senza dirlo.",
+    aziende: esiti.map((e, i) => e.status === "fulfilled"
+      ? { azienda: scelte[i].nome, percorso: e.value.percorso, dati: e.value.dati }
+      : { azienda: scelte[i].nome, errore: (e.reason as Error)?.message ?? "errore" }),
+  });
 }
 
 export const STRUMENTI = [
   strumento({
-    def: { nome: "costructo_briefing", descrizione: "Legge da Costructo il quadro di oggi: impegni di lavoro, cantieri, scadenze, documenti in scadenza, fatture da incassare.", schema: oggetto({}) },
-    azione: "costructo.leggi", viste: ["lavoro", "tutto"], input: vuoto,
-    esegui: (_i, c) => daCostructo(c, (cl) => cl.briefing()),
+    def: { nome: "costructo_briefing", descrizione: "Legge da Costructo il quadro di oggi: impegni di lavoro, cantieri, scadenze, documenti in scadenza, fatture da incassare.", schema: oggetto({ azienda }) },
+    azione: "costructo.leggi", viste: ["lavoro", "tutto"], input: z.object({ azienda: campoAzienda }).strict(),
+    esegui: (i, c) => daCostructo(c, i.azienda, (cl) => cl.briefing()),
   }),
   strumento({
-    def: { nome: "costructo_agenda", descrizione: "Legge l'agenda di lavoro di Costructo (impegni, riunioni, sopralluoghi).", schema: oggetto({ giorni }) },
-    azione: "costructo.leggi", viste: ["lavoro", "tutto"], input: z.object({ giorni: z.number().int().min(1).max(60) }).strict(),
-    esegui: (i, c) => daCostructo(c, (cl) => cl.agenda(i.giorni)),
+    def: { nome: "costructo_agenda", descrizione: "Legge l'agenda di lavoro di Costructo (impegni, riunioni, sopralluoghi).", schema: oggetto({ giorni, azienda }) },
+    azione: "costructo.leggi", viste: ["lavoro", "tutto"], input: z.object({ giorni: z.number().int().min(1).max(60), azienda: campoAzienda }).strict(),
+    esegui: (i, c) => daCostructo(c, i.azienda, (cl) => cl.agenda(i.giorni)),
   }),
   strumento({
-    def: { nome: "costructo_scadenze", descrizione: "Legge lo scadenzario di Costructo (pagamenti, incassi, adempimenti).", schema: oggetto({}) },
-    azione: "costructo.leggi", viste: ["lavoro", "tutto"], input: vuoto,
-    esegui: (_i, c) => daCostructo(c, (cl) => cl.scadenze()),
+    def: { nome: "costructo_scadenze", descrizione: "Legge lo scadenzario di Costructo (pagamenti, incassi, adempimenti).", schema: oggetto({ azienda }) },
+    azione: "costructo.leggi", viste: ["lavoro", "tutto"], input: z.object({ azienda: campoAzienda }).strict(),
+    esegui: (i, c) => daCostructo(c, i.azienda, (cl) => cl.scadenze()),
   }),
   strumento({
-    def: { nome: "costructo_documenti_in_scadenza", descrizione: "Legge da Costructo i documenti in scadenza (DURC, visite mediche, attestati, polizze).", schema: oggetto({}) },
-    azione: "costructo.leggi", viste: ["lavoro", "tutto"], input: vuoto,
-    esegui: (_i, c) => daCostructo(c, (cl) => cl.documentiInScadenza()),
+    def: { nome: "costructo_documenti_in_scadenza", descrizione: "Legge da Costructo i documenti in scadenza (DURC, visite mediche, attestati, polizze).", schema: oggetto({ azienda }) },
+    azione: "costructo.leggi", viste: ["lavoro", "tutto"], input: z.object({ azienda: campoAzienda }).strict(),
+    esegui: (i, c) => daCostructo(c, i.azienda, (cl) => cl.documentiInScadenza()),
   }),
   strumento({
-    def: { nome: "costructo_cantieri", descrizione: "Elenca i cantieri di Costructo con stato e indirizzo.", schema: oggetto({}) },
-    azione: "costructo.leggi", viste: ["lavoro", "tutto"], input: vuoto,
-    esegui: (_i, c) => daCostructo(c, (cl) => cl.cantieri()),
+    def: { nome: "costructo_cantieri", descrizione: "Elenca i cantieri di Costructo con stato e indirizzo.", schema: oggetto({ azienda }) },
+    azione: "costructo.leggi", viste: ["lavoro", "tutto"], input: z.object({ azienda: campoAzienda }).strict(),
+    esegui: (i, c) => daCostructo(c, i.azienda, (cl) => cl.cantieri()),
   }),
   strumento({
-    def: { nome: "costructo_cerca", descrizione: "Ricerca globale in Costructo (clienti, fornitori, cantieri, preventivi, documenti).", schema: oggetto({ testo: { type: "string", description: "Cosa cercare" } }) },
-    azione: "costructo.leggi", viste: ["lavoro", "tutto"], input: z.object({ testo: z.string().min(1).max(200) }).strict(),
-    esegui: (i, c) => daCostructo(c, (cl) => cl.cerca(i.testo)),
+    def: { nome: "costructo_cerca", descrizione: "Ricerca globale in Costructo (clienti, fornitori, cantieri, preventivi, documenti).", schema: oggetto({ testo: { type: "string", description: "Cosa cercare" }, azienda }) },
+    azione: "costructo.leggi", viste: ["lavoro", "tutto"], input: z.object({ testo: z.string().min(1).max(200), azienda: campoAzienda }).strict(),
+    esegui: (i, c) => daCostructo(c, i.azienda, (cl) => cl.cerca(i.testo)),
   }),
   strumento({
     def: { nome: "agenda_elenca", descrizione: "Elenca gli impegni dell'agenda privata di Jarvis.", schema: oggetto({ giorni }) },

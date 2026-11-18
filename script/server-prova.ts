@@ -15,6 +15,7 @@ import { creaCervelloFinto } from "../src/cervello/finto.js";
 import { aggiungiMemoria } from "../src/memorie.js";
 import { aggiungiImpegno } from "../src/agenda.js";
 import { salvaSegreto, salvaImpostazioni } from "../src/impostazioni.js";
+import { aggiungiAzienda } from "../src/aziende.js";
 import { registraConsumo } from "../src/consumi.js";
 import { dataIso } from "../src/tempo.js";
 
@@ -25,26 +26,39 @@ const db = apriDb(join(cartella, "prova.db"));
 const cifratore = creaCifratore(chiaveDaFrase("prova-interfaccia"));
 creaUtente(db, cifratore, "Luigi", PASSWORD, SEGRETO);
 
-// Costructo finto
-const costructo = createServer((req, res) => {
-  if (req.headers.authorization !== "Bearer csa_prova_interfaccia_123") { res.writeHead(401).end("{}"); return; }
-  const p = new URL(req.url || "/", "http://x").pathname;
-  const dati: Record<string, unknown> = {
-    "/api/assistente/v1/briefing": {
+// Costructo finto: due token = due aziende finte, ognuna con i suoi dati.
+const AZIENDE: Record<string, { azienda: { id: number; nome: string }; briefing: unknown }> = {
+  "Bearer csa_prova_interfaccia_123": {
+    azienda: { id: 1, nome: "Impresa Prova (finta)" },
+    briefing: {
       impegni: [{ titolo: "Sopralluogo cantiere Villa Rosa (finto)", inizio: new Date(Date.now() + 2 * 3600_000).toISOString() }],
       cantieri: [{ nome: "Villa Rosa (finto)" }, { nome: "Scuola media (finta)" }, { nome: "Capannone Est (finto)" }],
       scadenze: [{ titolo: "F24 di fine mese (finto)", scadenza: "30/11" }],
       documentiInScadenza: [{ titolo: "DURC impresa (finto)", scadenza: "25/11" }],
       fattureDaIncassare: [{ cliente: "Cliente Prova Srl", residuo: 4200 }],
     },
-    "/api/assistente/v1/io": { utente: { nome: "Luigi (finto)" } },
+  },
+  "Bearer csa_prova_seconda_456": {
+    azienda: { id: 2, nome: "Seconda Impresa (finta)" },
+    briefing: { cantieri: [{ nome: "Condominio Verde (finto)" }], fattureDaIncassare: [{ cliente: "Altro Cliente Srl", residuo: 1800 }] },
+  },
+};
+const costructo = createServer((req, res) => {
+  const a = AZIENDE[String(req.headers.authorization)];
+  if (!a) { res.writeHead(401).end("{}"); return; }
+  const p = new URL(req.url || "/", "http://x").pathname;
+  const dati: Record<string, unknown> = {
+    "/api/assistente/v1/briefing": a.briefing,
+    "/api/assistente/v1/io": { versione: 1, token: { id: 1, etichetta: "Jarvis (finto)" }, azienda: a.azienda },
   };
   res.writeHead(dati[p] ? 200 : 404, { "Content-Type": "application/json" }).end(JSON.stringify(dati[p] ?? {}));
 });
 costructo.listen(0, "127.0.0.1");
 await new Promise((r) => costructo.once("listening", r));
 salvaSegreto(db, cifratore, "costructo_url", `http://127.0.0.1:${(costructo.address() as AddressInfo).port}`);
-salvaSegreto(db, cifratore, "costructo_token", "csa_prova_interfaccia_123");
+const fonte = { db, cifratore, urlAmbiente: "", tokenAmbiente: "" };
+await aggiungiAzienda(fonte, { token: "csa_prova_interfaccia_123" });
+await aggiungiAzienda(fonte, { token: "csa_prova_seconda_456" });
 
 // Dati finti
 const oggi = dataIso(Date.now(), "Europe/Rome");

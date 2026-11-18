@@ -30,6 +30,7 @@ Servizio **separato** da Costructo, con indirizzo e accesso propri. Costructo è
 | `src/strumenti.ts`, `src/permessi.ts`, `src/registro.ts` | strumenti dell'AI, regole dei permessi, registro azioni |
 | `src/memorie.ts`, `src/agenda.ts`, `src/conversazioni.ts`, `src/consumi.ts`, `src/impostazioni.ts` | dati |
 | `src/costructo.ts`, `src/calendario.ts`, `src/meteo.ts` | connettori |
+| `src/aziende.ts` | più aziende di Costructo: un token per azienda, elenco cifrato, scelta dell'azienda per gli strumenti ([AZIENDE.md](AZIENDE.md)) |
 | `src/briefing.ts`, `src/push.ts` | briefing e notifiche |
 | `src/sicurezza/` | password (scrypt), TOTP, sessioni, limiti, cifratura, utente |
 | `public/` | PWA (`index.html`, `app.js`, `voce.js`, `api.js`, `sw.js`, manifest, icone) |
@@ -70,7 +71,7 @@ array o dentro un oggetto. Token: `Authorization: Bearer csa_…`. Chiavi lette:
 
 | Rotta | Cosa usa Jarvis |
 |---|---|
-| `GET /v1/io` | solo per «Prova il collegamento» |
+| `GET /v1/io` | `azienda {id, nome}`: quando si aggiunge un token (nome dell'azienda, niente doppioni) e per «Prova il collegamento» |
 | `GET /v1/briefing` | `impegni[] {titolo, inizio ISO}`, `cantieri[] {nome, lat, lon}`, `scadenze[] {titolo, scadenza}`, `documentiInScadenza[] {titolo, scadenza}`, `fattureDaIncassare[] {cliente, numero, importo, residuo, scadenza}` (accetta anche `agenda`, `documenti`, `fatture`) |
 | `GET /v1/agenda?giorni=N` | lista di impegni |
 | `GET /v1/scadenze`, `/v1/documenti-in-scadenza`, `/v1/cantieri` | liste |

@@ -189,6 +189,14 @@ body.ascolta .stato-voce { color: var(--ambra); }
 @media (prefers-reduced-motion: reduce) { .parla[aria-pressed="true"] { animation: none; } }
 
 /* memoria */
+.sottotitolo { font-size: 15px; font-weight: 600; margin: 14px 0 6px; }
+.lista-aziende, .lista-esiti { list-style: none; padding: 0; margin: 0 0 10px; display: grid; gap: 6px; }
+.lista-aziende li { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 8px 12px; background: var(--carta); border: 1px solid var(--bordo); border-left: 5px solid var(--lavoro); border-radius: 12px; }
+.lista-aziende li.vuoto { border-left-color: var(--bordo); color: var(--testo-2); }
+.lista-aziende .nome-azienda { font-weight: 600; overflow-wrap: anywhere; }
+.lista-aziende small { color: var(--testo-2); margin-left: 6px; font-variant-numeric: tabular-nums; }
+.lista-esiti li { color: var(--ok); }
+.lista-esiti li.male { color: var(--errore); }
 .riga-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin: 8px 0 12px; }
 .riga-form input { grid-column: 1 / -1; }
 .lista-memorie, .lista-registro { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }

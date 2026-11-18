@@ -14,12 +14,13 @@ Un solo utente: Luigi.
 - **Memoria divisa** in PRIVATO e LAVORO: la vedi, la correggi, la cancelli («Cosa sa di me»). Conversazioni cancellate da sole dopo 30 giorni; i ricordi restano finché non li cancelli.
 - **Agenda privata** locale (aggiungi, elenca, cancella; se la cancellazione è ambigua chiede quale).
 - **Costructo in sola lettura**: briefing, agenda, scadenze, documenti in scadenza, cantieri, ricerca.
-- **Briefing del mattino** con notifica push (7:00 di serie): impegni, cantieri, scadenze, documenti, fatture da incassare, meteo dei cantieri (facoltativo, Open-Meteo).
+  **Più aziende** (fino a 5, un token per azienda): Jarvis dice sempre di quale azienda parla e, se non è chiaro, chiede.
+- **Briefing del mattino** con notifica push (7:00 di serie): impegni, cantieri, scadenze, documenti, fatture da incassare, meteo dei cantieri (facoltativo, Open-Meteo). Con più aziende: una parte e una notifica per ogni azienda.
 - **Calcolatrice istantanea** e **frasi rapide** senza AI (costo zero).
 - **Registro** di tutte le azioni («Cosa ha fatto») e **Spesa del mese**.
 
 Dettagli: [docs/ARCHITETTURA.md](docs/ARCHITETTURA.md), [docs/SICUREZZA.md](docs/SICUREZZA.md),
-[docs/CONSERVAZIONE.md](docs/CONSERVAZIONE.md), [docs/FASE1.md](docs/FASE1.md).
+[docs/CONSERVAZIONE.md](docs/CONSERVAZIONE.md), [docs/FASE1.md](docs/FASE1.md), [docs/AZIENDE.md](docs/AZIENDE.md).
 
 ## Avvio in locale
 
@@ -48,11 +49,19 @@ Per la produzione: `npm run build` e poi `npm start` (con `NODE_ENV=production`,
 | `JARVIS_FUSO` | fuso di Luigi (di serie `Europe/Rome`) | no |
 | `ANTHROPIC_API_KEY` | chiave di Claude: solo sul server, mai nel browser | per l'AI |
 | `JARVIS_MODELLO`, `JARVIS_MODELLO_APPROFONDITO` | di serie `claude-haiku-5-5` e `claude-sonnet-5-5` | no |
-| `COSTRUCTO_URL`, `COSTRUCTO_TOKEN` | collegamento a Costructo (token `csa_…`); si possono dare anche dalle Impostazioni | no |
+| `COSTRUCTO_URL`, `COSTRUCTO_TOKEN` | collegamento a Costructo (token `csa_…` di **una** azienda); si possono dare anche dalle Impostazioni, dove si aggiungono anche i token delle altre aziende (vedi sotto) | no |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_CONTATTO` | notifiche push | per le notifiche |
 | `JARVIS_CODICE_PRIMO_ACCESSO` | codice monouso per creare l'utente dal browser quando il database è vuoto (es. primo avvio su Railway); dopo la creazione non serve più e si può togliere | al primo avvio |
 
 ElevenLabs è previsto come opzione ma **spento** in questa fase.
+
+### Collegare più aziende di Costructo
+
+In Costructo ogni token `csa_…` vale per **una sola azienda**. Da Impostazioni → «Collegamento a Costructo»:
+scrivi l'indirizzo di Costructo (uno solo), poi incolla il token di ogni azienda in «Aggiungi il token di un'altra
+azienda» e premi **Aggiungi** (fino a 5). Jarvis legge il nome dell'azienda da Costructo; se il token non è
+accettato, non lo salva. I token restano sul server, cifrati. Un vecchio `COSTRUCTO_TOKEN` vale come prima azienda.
+Dettagli: [docs/AZIENDE.md](docs/AZIENDE.md).
 
 ## Pacchetti da installare dopo l'autorizzazione
 

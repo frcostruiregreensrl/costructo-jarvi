@@ -5,8 +5,8 @@ import { creaCifratore } from "./sicurezza/cifra.js";
 import { creaApp } from "./app.js";
 import { pulisciConversazioniVecchie } from "./conversazioni.js";
 import { creaInvio, controllaOraBriefing } from "./push.js";
-import { creaBriefing, testoNotifica } from "./briefing.js";
-import { creaClientCostructo } from "./costructo.js";
+import { creaBriefing, notificheDelMattino } from "./briefing.js";
+import { aziendeCollegate } from "./aziende.js";
 import { leggiSegreto } from "./impostazioni.js";
 import { registra, pulisciRegistroVecchio } from "./registro.js";
 import { utenteEsiste } from "./sicurezza/utente.js";
@@ -39,10 +39,10 @@ setInterval(pulizia, 6 * 3600_000).unref();
 
 setInterval(() => {
   controllaOraBriefing(db, config.fusoOrario, async () => {
-    const url = leggiSegreto(db, cifratore, "costructo_url") || config.costructoUrl;
-    const token = leggiSegreto(db, cifratore, "costructo_token") || config.costructoToken;
-    const b = await creaBriefing({ db, fuso: config.fusoOrario, costructo: url && token ? creaClientCostructo({ url, token }) : null, linkCalendario: leggiSegreto(db, cifratore, "calendario_ical") });
-    return testoNotifica(b);
+    // Una notifica per ogni azienda collegata (con una sola azienda: una notifica, come prima).
+    const aziende = aziendeCollegate({ db, cifratore, urlAmbiente: config.costructoUrl, tokenAmbiente: config.costructoToken });
+    const b = await creaBriefing({ db, fuso: config.fusoOrario, aziende, linkCalendario: leggiSegreto(db, cifratore, "calendario_ical") });
+    return notificheDelMattino(b);
   }, invia).catch((e) => registra(db, "notifica.briefing", "errore", "sistema", { messaggio: String(e?.message || e) }));
 }, 60_000).unref();
 

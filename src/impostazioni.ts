@@ -43,8 +43,8 @@ export function scriviValore(db: Db, chiave: string, valore: unknown): void {
     .run(`_${chiave}`, JSON.stringify(valore));
 }
 
-// ---------------------------------------------------------------- segreti cifrati (token Costructo, link iCal…)
-export type NomeSegreto = "costructo_url" | "costructo_token" | "calendario_ical" | "elevenlabs_chiave";
+// ---------------------------------------------------------------- segreti cifrati (token Costructo, elenco delle aziende con i loro token, link iCal…)
+export type NomeSegreto = "costructo_url" | "costructo_token" | "costructo_aziende" | "calendario_ical" | "elevenlabs_chiave";
 
 export function salvaSegreto(db: Db, c: Cifratore, nome: NomeSegreto, valore: string): void {
   if (!valore) { db.prepare("DELETE FROM segreti WHERE nome = ?").run(nome); return; }

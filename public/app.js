@@ -14,6 +14,7 @@ const stato = {
   briefing: null,
   inCorso: null,
   ultimoRegistro: null,
+  urlSalvato: "",
 };
 
 function leggiLocale(k, predefinito) { try { return localStorage.getItem(`jarvis.${k}`) || predefinito; } catch { return predefinito; } }
@@ -195,7 +196,9 @@ function disegnaAdesso() {
   for (const c of cose) {
     const li = crea("li", c.spazio);
     const div = crea("div");
-    div.append(crea("b", "", c.testo), crea("small", "", `${c.spazio === "lavoro" ? "Lavoro" : "Privato"}${c.quando ? ` · ${c.quando}` : ""}`));
+    // Lavoro: si vede sempre di quale azienda è (nel testo, se le aziende sono più di una, oppure qui sotto).
+    const azienda = c.spazio === "lavoro" && c.azienda && !c.testo.startsWith(c.azienda) ? ` · ${c.azienda}` : "";
+    div.append(crea("b", "", c.testo), crea("small", "", `${c.spazio === "lavoro" ? "Lavoro" : "Privato"}${azienda}${c.quando ? ` · ${c.quando}` : ""}`));
     li.append(div);
     lista.append(li);
   }
@@ -427,7 +430,8 @@ async function caricaImpostazioni() {
     $("#impTema").value = i.tema;
     riempiVoci(i.vocePreferita);
     $("#colUrl").value = c.costructoUrl || "";
-    $("#colTokenMascherato").textContent = c.costructoToken || "nessuno";
+    stato.urlSalvato = c.costructoUrl || "";
+    disegnaAziende(c.aziende || []);
     $("#colIcalStato").textContent = c.calendario ? "sì" : "no";
     aggiornaStatoNotifiche();
   } catch (e) { if (e instanceof NonAutenticato) mostraAccesso(); }
@@ -471,26 +475,88 @@ $("#formImpostazioni").addEventListener("submit", async (e) => {
     esito.textContent = "Impostazioni salvate.";
   } catch (err) { esito.className = "esito male"; esito.textContent = err.message; }
 });
+// Aziende di Costructo: una per token. Il server manda solo il nome e le ultime cifre del token.
+function disegnaAziende(aziende) {
+  const lista = $("#listaAziende");
+  lista.replaceChildren();
+  if (!aziende.length) { lista.append(crea("li", "vuoto", "Nessuna azienda collegata.")); return; }
+  for (const a of aziende) {
+    const li = crea("li");
+    const nome = crea("span", "nome-azienda", a.nome);
+    nome.append(crea("small", "", `token ${a.token}`));
+    const togli = crea("button", "secondario", "Rimuovi");
+    togli.type = "button";
+    togli.setAttribute("aria-label", `Rimuovi l'azienda ${a.nome}`);
+    togli.addEventListener("click", async () => {
+      if (!confirm(`Vuoi scollegare «${a.nome}» da Jarvis? Il token verrà cancellato da Jarvis (in Costructo resta).`)) return;
+      const esito = $("#esitoCollegamenti");
+      try {
+        const c = await api(`/api/collegamenti/aziende/${encodeURIComponent(a.id)}`, { metodo: "DELETE" });
+        disegnaAziende(c.aziende || []);
+        esito.className = "esito"; esito.textContent = `${a.nome} scollegata.`;
+        caricaBriefing();
+      } catch (err) { esito.className = "esito male"; esito.textContent = err.message; }
+    });
+    li.append(nome, togli);
+    lista.append(li);
+  }
+}
+/** Salva l'indirizzo di Costructo se è cambiato (serve prima di aggiungere un token). */
+async function salvaUrlSeCambiato() {
+  const url = $("#colUrl").value.trim();
+  if (url === (stato.urlSalvato || "")) return;
+  const c = await api("/api/collegamenti", { metodo: "PUT", corpo: { costructoUrl: url } });
+  stato.urlSalvato = c.costructoUrl || "";
+}
+async function aggiungiAzienda() {
+  const esito = $("#esitoCollegamenti");
+  const token = $("#colToken").value.trim();
+  if (!token) { esito.className = "esito male"; esito.textContent = "Scrivi il token dell'azienda (inizia con csa_)."; $("#colToken").focus(); return false; }
+  esito.className = "esito"; esito.textContent = "Controllo il token con Costructo…";
+  try {
+    await salvaUrlSeCambiato();
+    const c = await api("/api/collegamenti/aziende", { metodo: "POST", corpo: { token } });
+    $("#colToken").value = "";
+    disegnaAziende(c.aziende || []);
+    const nuova = (c.aziende || []).at(-1);
+    esito.className = "esito"; esito.textContent = nuova ? `Azienda collegata: ${nuova.nome}.` : "Azienda collegata.";
+    caricaBriefing();
+    return true;
+  } catch (err) { esito.className = "esito male"; esito.textContent = err.message; return false; }
+}
+$("#aggiungiAzienda").addEventListener("click", () => { aggiungiAzienda(); });
 $("#formCollegamenti").addEventListener("submit", async (e) => {
   e.preventDefault();
   const esito = $("#esitoCollegamenti");
   const corpo = { costructoUrl: $("#colUrl").value };
-  if ($("#colToken").value) corpo.costructoToken = $("#colToken").value;
   if ($("#colIcal").value) corpo.calendarioIcal = $("#colIcal").value;
   try {
     const c = await api("/api/collegamenti", { metodo: "PUT", corpo });
-    $("#colToken").value = $("#colIcal").value = "";
-    $("#colTokenMascherato").textContent = c.costructoToken || "nessuno";
+    stato.urlSalvato = c.costructoUrl || "";
+    $("#colIcal").value = "";
+    disegnaAziende(c.aziende || []);
     $("#colIcalStato").textContent = c.calendario ? "sì" : "no";
     esito.className = "esito"; esito.textContent = "Collegamenti salvati.";
-    caricaBriefing();
+    // Un token scritto nel campo e confermato con Invio vale come «Aggiungi».
+    if ($("#colToken").value.trim()) await aggiungiAzienda();
+    else caricaBriefing();
   } catch (err) { esito.className = "esito male"; esito.textContent = err.message; }
 });
 $("#provaCostructo").addEventListener("click", async () => {
-  const r = await api("/api/collegamenti/costructo/prova", { metodo: "POST", corpo: {} }).catch((e) => ({ ok: false, messaggio: e.message }));
   const esito = $("#esitoCollegamenti");
-  esito.className = r.ok ? "esito" : "esito male";
-  esito.textContent = r.messaggio;
+  const lista = $("#esitoProvaAziende");
+  lista.replaceChildren();
+  esito.className = "esito"; esito.textContent = "Provo il collegamento…";
+  const r = await api("/api/collegamenti/costructo/prova", { metodo: "POST", corpo: {} }).catch((e) => ({ ok: false, messaggio: e.message, aziende: [] }));
+  const aziende = r.aziende || [];
+  if (aziende.length > 1) {
+    for (const a of aziende) lista.append(crea("li", a.ok ? "" : "male", `${a.nome}: ${a.ok ? "collegamento riuscito" : a.messaggio}`));
+    esito.className = r.ok ? "esito" : "esito male";
+    esito.textContent = r.ok ? "Tutte le aziende rispondono." : "Una o più aziende non rispondono: vedi sopra.";
+  } else {
+    esito.className = r.ok ? "esito" : "esito male";
+    esito.textContent = aziende[0] && r.ok ? `${aziende[0].nome}: collegamento riuscito.` : r.messaggio;
+  }
 });
 
 // ------------------------------------------------------------------ notifiche push

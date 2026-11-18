@@ -44,8 +44,12 @@ export async function inviaATutti(db: Db, invia: Invia, titolo: string, testo: s
   return ok;
 }
 
-/** Da chiamare ogni minuto: se è l'ora del briefing e oggi non è ancora partito, lo manda. */
-export async function controllaOraBriefing(db: Db, fuso: string, prepara: () => Promise<string>, invia: Invia | null, ora = Date.now()): Promise<boolean> {
+/**
+ * Da chiamare ogni minuto: se è l'ora del briefing e oggi non è ancora partito, lo manda.
+ * `prepara` dà un testo (una notifica) oppure l'elenco delle notifiche (una per azienda):
+ * in ogni caso partono tutte insieme UNA sola volta al giorno.
+ */
+export async function controllaOraBriefing(db: Db, fuso: string, prepara: () => Promise<string | Array<{ titolo: string; testo: string }>>, invia: Invia | null, ora = Date.now()): Promise<boolean> {
   const imp = leggiImpostazioni(db);
   if (!imp.briefingPush || !invia) return false;
   const p = partiLocali(ora, fuso);
@@ -55,6 +59,8 @@ export async function controllaOraBriefing(db: Db, fuso: string, prepara: () => 
   const oggi = dataIso(ora, fuso);
   if (leggiValore<string>(db, "ultimoBriefingPush") === oggi) return false;
   scriviValore(db, "ultimoBriefingPush", oggi);
-  await inviaATutti(db, invia, "Buongiorno da Jarvis", await prepara());
+  const pronte = await prepara();
+  const notifiche = typeof pronte === "string" ? [{ titolo: "Buongiorno da Jarvis", testo: pronte }] : pronte;
+  for (const n of notifiche) await inviaATutti(db, invia, n.titolo, n.testo);
   return true;
 }

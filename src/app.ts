@@ -15,12 +15,12 @@ import { bloccatoPer, registraErrore, azzera, ritardoAccesso, REGOLA_ACCESSO_IP,
 import { utenteEsiste, verificaAccesso, nomeUtente, creaUtente } from "./sicurezza/utente.js";
 import { uriOtpauth } from "./sicurezza/totp.js";
 import { registra, leggiRegistro, dimenticaNelRegistro } from "./registro.js";
-import { leggiImpostazioni, salvaImpostazioni, salvaSegreto, leggiSegreto, maschera } from "./impostazioni.js";
+import { leggiImpostazioni, salvaImpostazioni, salvaSegreto, leggiSegreto } from "./impostazioni.js";
 import { elencaMemorie, aggiungiMemoria, correggiMemoria, cancellaMemoria, esportaMemorie } from "./memorie.js";
 import { impegniProssimiGiorni, aggiungiImpegno, cancellaImpegno, descriviImpegno } from "./agenda.js";
 import { elencaConversazioni, ultimiMessaggi } from "./conversazioni.js";
 import { riepilogoMese, LISTINO } from "./consumi.js";
-import { creaClientCostructo, type ClientCostructo } from "./costructo.js";
+import { aziendeCollegate, aziendeVisibili, aggiungiAzienda, rimuoviAzienda, rinominaAzienda, salvaTokenPrincipale, provaAziende, urlCostructo, leggiAziende, ErroreAziende, type FonteAziende } from "./aziende.js";
 import { controllaIndirizzo } from "./calendario.js";
 import { creaBriefing } from "./briefing.js";
 import { rispondi } from "./assistente.js";
@@ -168,11 +168,9 @@ export function creaApp(o: OpzioniApp) {
   });
 
   // ------------------------------------------------------------ dipendenze
-  const costructo = (): ClientCostructo | null => {
-    const url = leggiSegreto(db, cifratore, "costructo_url") || config.costructoUrl;
-    const token = leggiSegreto(db, cifratore, "costructo_token") || config.costructoToken;
-    return url && token ? creaClientCostructo({ url, token, fetchFn: o.fetchFn }) : null;
-  };
+  // Aziende di Costructo: una per token. I token restano sul server, cifrati.
+  const fonte: FonteAziende = { db, cifratore, urlAmbiente: config.costructoUrl, tokenAmbiente: config.costructoToken, fetchFn: o.fetchFn };
+  const aziende = () => aziendeCollegate(fonte);
   const linkCalendario = () => leggiSegreto(db, cifratore, "calendario_ical");
   let cervelloCache: Promise<Cervello> | null = null;
   const cervello = o.cervello ?? (() => {
@@ -181,14 +179,14 @@ export function creaApp(o: OpzioniApp) {
   });
   const dip = {
     db, fuso: config.fusoOrario, modelloPredefinito: config.modelloPredefinito, modelloApprofondito: config.modelloApprofondito,
-    cervello, costructo, linkCalendario, fetchFn: o.fetchFn,
+    cervello, aziende, linkCalendario, fetchFn: o.fetchFn,
   };
-  const prepara = () => creaBriefing({ db, fuso: config.fusoOrario, costructo: costructo(), linkCalendario: linkCalendario(), fetchFn: o.fetchFn });
+  const prepara = () => creaBriefing({ db, fuso: config.fusoOrario, aziende: aziende(), linkCalendario: linkCalendario(), fetchFn: o.fetchFn });
 
   // ------------------------------------------------------------ avvio, briefing, domanda
   app.get("/api/avvio", (_req, res) => {
     const imp = leggiImpostazioni(db);
-    res.json({ nome: nomeUtente(db), impostazioni: imp, spesa: riepilogoMese(db, imp.tettoMensileUsd, config.fusoOrario), costructo: !!costructo()?.configurato, pushPronte: !!o.invia, chiavePush: config.vapidPubblica || null });
+    res.json({ nome: nomeUtente(db), impostazioni: imp, spesa: riepilogoMese(db, imp.tettoMensileUsd, config.fusoOrario), costructo: aziende().length > 0, aziende: aziende().map((a) => a.nome), pushPronte: !!o.invia, chiavePush: config.vapidPubblica || null });
   });
 
   app.get("/api/briefing", async (_req, res) => { res.json(await prepara()); });
@@ -294,11 +292,12 @@ export function creaApp(o: OpzioniApp) {
     } catch { res.status(400).json({ errore: "Impostazioni non valide." }); }
   });
   function statoCollegamenti() {
-    const url = leggiSegreto(db, cifratore, "costructo_url") || config.costructoUrl;
-    const token = leggiSegreto(db, cifratore, "costructo_token") || config.costructoToken;
+    const elenco = aziendeVisibili(fonte);
     return {
-      costructoUrl: url,
-      costructoToken: maschera(token),
+      costructoUrl: urlCostructo(fonte),
+      /** Compatibilità: le ultime cifre del primo token. L'elenco completo è in `aziende`. */
+      costructoToken: elenco[0]?.token ?? "",
+      aziende: elenco,
       calendario: !!linkCalendario(),
       anthropic: !!config.anthropicApiKey,
       elevenLabs: false,
@@ -322,11 +321,8 @@ export function creaApp(o: OpzioniApp) {
         }
         salvaSegreto(db, cifratore, "costructo_url", u);
       }
-      if (d.data.costructoToken !== undefined) {
-        const t = d.data.costructoToken.trim();
-        if (t && !/^csa_[A-Za-z0-9_\-]{8,}$/.test(t)) throw new Error("Il token di Costructo deve iniziare con csa_.");
-        salvaSegreto(db, cifratore, "costructo_token", t);
-      }
+      // Vecchio campo «token unico»: vale solo se non ci sono già più aziende (poi si usa «Aggiungi»).
+      if (d.data.costructoToken !== undefined) salvaTokenPrincipale(fonte, d.data.costructoToken);
       if (d.data.calendarioIcal !== undefined) {
         const l = d.data.calendarioIcal.trim();
         if (l) await controllaIndirizzo(l);
@@ -338,16 +334,49 @@ export function creaApp(o: OpzioniApp) {
     registra(db, "collegamenti.modifica", "fatto", "luigi", { campi: Object.keys(d.data) });
     res.json(statoCollegamenti());
   });
-  app.post("/api/collegamenti/costructo/prova", async (_req, res) => {
-    const c = costructo();
-    if (!c) return res.json({ ok: false, messaggio: "Costructo non è collegato." });
+  // ------------------------------------------------------------ aziende di Costructo (un token per azienda)
+  const erroreAziende = (res: Response, e: unknown) => {
+    const err = e instanceof ErroreAziende ? e : new ErroreAziende("Operazione non riuscita.");
+    return res.status(err.stato).json({ errore: err.message });
+  };
+  app.get("/api/collegamenti/aziende", (_req, res) => { res.json(aziendeVisibili(fonte)); });
+  app.post("/api/collegamenti/aziende", async (req, res) => {
+    const d = z.object({ token: z.string().min(1).max(300), nome: z.string().max(60).optional() }).safeParse(req.body);
+    if (!d.success) return res.status(400).json({ errore: "Scrivi il token (inizia con csa_)." });
     try {
-      await c.io();
-      registra(db, "costructo.leggi", "fatto", "luigi", { percorso: "/io" });
-      res.json({ ok: true, messaggio: "Collegamento a Costructo riuscito." });
+      const a = await aggiungiAzienda(fonte, d.data);
+      registra(db, "collegamenti.modifica", "fatto", "luigi", { campi: ["azienda.aggiungi"], azienda: a.nome, id: a.id });
+      res.json(statoCollegamenti());
     } catch (e) {
-      res.json({ ok: false, messaggio: (e as Error).message });
+      registra(db, "collegamenti.modifica", "errore", "luigi", { campi: ["azienda.aggiungi"], motivo: e instanceof ErroreAziende ? e.message : "errore" });
+      erroreAziende(res, e);
     }
+  });
+  app.patch("/api/collegamenti/aziende/:id", async (req, res) => {
+    const d = z.object({ nome: z.string().min(1).max(60) }).safeParse(req.body);
+    if (!d.success) return res.status(400).json({ errore: "Scrivi un nome." });
+    try {
+      const a = await rinominaAzienda(fonte, String(req.params.id), d.data.nome);
+      registra(db, "collegamenti.modifica", "fatto", "luigi", { campi: ["azienda.rinomina"], azienda: a.nome, id: a.id });
+      res.json(statoCollegamenti());
+    } catch (e) { erroreAziende(res, e); }
+  });
+  app.delete("/api/collegamenti/aziende/:id", async (req, res) => {
+    try {
+      const a = await rimuoviAzienda(fonte, String(req.params.id));
+      registra(db, "collegamenti.modifica", "fatto", "luigi", { campi: ["azienda.rimuovi"], azienda: a.nome, id: a.id });
+      res.json(statoCollegamenti());
+    } catch (e) { erroreAziende(res, e); }
+  });
+  app.post("/api/collegamenti/costructo/prova", async (_req, res) => {
+    if (!leggiAziende(fonte).length) return res.json({ ok: false, messaggio: "Costructo non è collegato.", aziende: [] });
+    const esiti = await provaAziende(fonte);
+    for (const e of esiti) if (e.ok) registra(db, "costructo.leggi", "fatto", "luigi", { percorso: "/io", azienda: e.nome });
+    const ok = esiti.every((e) => e.ok);
+    const messaggio = esiti.length === 1
+      ? (ok ? "Collegamento a Costructo riuscito." : esiti[0].messaggio)
+      : esiti.map((e) => `${e.nome}: ${e.ok ? "collegata" : e.messaggio}`).join(" · ");
+    res.json({ ok, messaggio, aziende: esiti });
   });
 
   // ------------------------------------------------------------ notifiche push

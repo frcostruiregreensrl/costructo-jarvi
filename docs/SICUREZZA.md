@@ -30,7 +30,10 @@ Il service worker **non mette mai in cache le API** (dati personali).
 ## Chiavi e segreti
 - La chiave di Claude e le chiavi VAPID stanno **solo** nelle variabili d'ambiente del server.
 - Token di Costructo e link iCal salvati dalle Impostazioni: **cifrati** (AES-256-GCM) con `JARVIS_CHIAVE_CIFRATURA`.
-- Il browser non li riceve mai: vede solo «••••» e le ultime 4 cifre (`iniezione.test.ts`).
+  Con più aziende ogni azienda ha il suo token: l'elenco (nome + token) sta nel segreto cifrato `costructo_aziende`.
+  Un token si salva solo se Costructo lo accetta (`/io`); lo stesso token o la stessa azienda non si aggiungono due volte.
+- Il browser non li riceve mai: vede solo «••••» e le ultime 4 cifre (`iniezione.test.ts`). Nessuna risposta delle API e nessuna riga del registro contiene un token (`aziende.test.ts`).
+- I nomi delle aziende arrivano da Costructo: sono **dati**, quindi vanno all'AI nel messaggio del turno, tra i delimitatori, e non nel prompt di sistema.
 - Nessuna lettura di chiavi di altre applicazioni (l'originale leggeva il database di FreeLLMAPI).
 
 ## Dati esterni = dati, mai istruzioni
