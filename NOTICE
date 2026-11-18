@@ -1,0 +1,46 @@
+COSTRUCTO J.A.R.V.I.S.
+Copyright (c) 2026 FR Costruire Green S.r.l. — licenza MIT (vedi LICENSE).
+
+Questo progetto contiene parti copiate e adattate da J.A.R.V.I.S. di Thomas Colombo
+(repository thomas2306/jarvis-tiktok, commit d9fc6a5), distribuito con questa licenza:
+
+  MIT License
+
+  Copyright (c) 2026 Thomas Colombo
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+Parti copiate o adattate (con la nota nel file):
+- src/calcolo.ts            ← calcolo.mjs (calcolatrice senza eval)
+- src/calendario.ts         ← calendar.mjs (lettura iCal, con correzioni di sicurezza e ricorrenze)
+- src/prompt.ts             ← istruzioni del cervello in server.mjs (tono e regole per la voce)
+- src/strumenti.ts          ← strumenti add_event / delete_event / save_memory / show_number di server.mjs
+- public/voce.js            ← classi Mouth (voce a frasi) e lettura in streaming di audio.js / app.js
+- public/classic/scena3d.js ← scene.js (grafica 3D: sfera di particelle e rete neurale)
+- public/classic/suoni.js   ← effetti sonori generati (sfx) di audio.js
+- public/classic/frasi.js   ← phrases.js (risposte rapide di personalità)
+- public/classic/classic.js, classic.css ← logica a stati, tasti e stile di app.js / styles.css
+
+Componenti di terze parti NON inclusi nel repository:
+- three.js (MIT), da installare come dipendenza npm.
+- Rumore simplex 3D di Ashima Arts / Stefan Gustavson (MIT), dentro scena3d.js come nell'originale.
+
+NON copiato: music/theme.mp3 dell'originale (licenza sconosciuta). La modalità Classic funziona senza musica;
+si può aggiungere un brano con licenza in public/classic/musica.mp3.
+Non copiato nemmeno il font Inter: l'interfaccia usa i caratteri di sistema.
