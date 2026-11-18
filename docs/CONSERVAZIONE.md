@@ -57,3 +57,12 @@ Non è una funzione dell'originale (che non leggeva la posta), ma vale la stessa
 nomi degli allegati, riassunto, urgenza), le bozze e le tracce delle conferme automatiche più vecchie di 30 giorni.
 Le mail **sul server di posta** non vengono mai toccate: Jarvis non le cancella, non le sposta e non le segna come lette.
 Togliendo una casella dalle Impostazioni si cancellano subito anche le sue mail e bozze salvate in Jarvis.
+
+## Fase 3: conservazione dei dati di WhatsApp
+
+Come per la posta: **i dati di WhatsApp restano in Jarvis al massimo 30 giorni**. La pulizia ogni 6 ore
+(`pulisciWhatsappVecchio` in `src/whatsapp/archivio.ts`, chiamata da `src/server.ts`) cancella i messaggi salvati (testo breve
+di 4 KB, dati degli allegati, riassunti, urgenza), le risposte proposte o mandate, le domande «Di quale azienda è…?» e le
+tracce delle conferme automatiche più vecchie di 30 giorni, e i contatti rimasti senza messaggi. Resta solo la **scelta di
+Luigi** sull'azienda di un contatto (come un ricordo), finché non la cambia. I messaggi **sul telefono** non vengono mai
+toccati: Jarvis non li cancella e non li segna come letti.

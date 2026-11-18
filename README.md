@@ -28,8 +28,16 @@ Un solo utente: Luigi.
 - **Calendario Apple** (iCloud, sola lettura) con scelta dei calendari privati o di un'azienda.
 - Dati delle mail cancellati dopo 30 giorni. Come collegare Gmail, PEC e Apple passo per passo: [docs/FASE2.md](docs/FASE2.md).
 
+## Cosa fa in più (Fase 3, parte 1: WhatsApp senza collegamento reale)
+
+- **WhatsApp** (un solo numero per le aziende e il privato): tutto pronto ma **spento** finché non si fa il collegamento
+  della parte 2 (app WhatsApp Business + Meta, con la «coesistenza»). Webhook firmato, chat divise per azienda e privato,
+  riassunti e urgenze, **domanda «Di quale azienda è…?»** quando non è chiaro (prima cerca il numero in Costructo).
+- Risposte preparate da Jarvis che partono **solo dopo il tuo sì**, solo entro 24 ore; mai «spunte blu», mai nei gruppi.
+  Conferme automatiche spente di serie. Dati cancellati dopo 30 giorni. Dettagli e passi della parte 2: [docs/FASE3.md](docs/FASE3.md).
+
 Dettagli: [docs/ARCHITETTURA.md](docs/ARCHITETTURA.md), [docs/SICUREZZA.md](docs/SICUREZZA.md),
-[docs/CONSERVAZIONE.md](docs/CONSERVAZIONE.md), [docs/FASE1.md](docs/FASE1.md), [docs/AZIENDE.md](docs/AZIENDE.md), [docs/FASE2.md](docs/FASE2.md).
+[docs/CONSERVAZIONE.md](docs/CONSERVAZIONE.md), [docs/FASE1.md](docs/FASE1.md), [docs/AZIENDE.md](docs/AZIENDE.md), [docs/FASE2.md](docs/FASE2.md), [docs/FASE3.md](docs/FASE3.md).
 
 ## Avvio in locale
 
@@ -63,6 +71,10 @@ Per la produzione: `npm run build` e poi `npm start` (con `NODE_ENV=production`,
 | `JARVIS_CODICE_PRIMO_ACCESSO` | codice monouso per creare l'utente dal browser quando il database è vuoto (es. primo avvio su Railway); dopo la creazione non serve più e si può togliere | al primo avvio |
 
 ElevenLabs è previsto come opzione ma **spento** in questa fase.
+
+WhatsApp (Fase 3) non ha variabili d'ambiente: token, segreto dell'app e parola di verifica si scrivono in Impostazioni →
+WhatsApp e restano cifrati nel database. L'indirizzo del webhook da dare a Meta è il primo indirizzo https di `JARVIS_ORIGINE`
+seguito da `/api/whatsapp/webhook`. Nessun pacchetto nuovo (solo `fetch` e `node:crypto`).
 
 ### Collegare più aziende di Costructo
 
@@ -100,6 +112,7 @@ npm test                  # test del server (node:test + tsx)
 npm run check             # controllo dei tipi TypeScript
 npm run test:interfaccia  # prova Playwright a 390 e 1280 px, tema chiaro e scuro (screenshot in ./prova-foto)
 # Posta e calendario Apple si provano con server finti (IMAP, SMTP, iCloud): nessuna casella vera.
+# WhatsApp si prova con un Meta finto (test/metaFinto.ts): nessun numero vero, nessuna chiamata a Meta.
 ```
 
 ## Licenza

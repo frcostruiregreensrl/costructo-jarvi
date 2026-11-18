@@ -1,4 +1,4 @@
-# Architettura di COSTRUCTO J.A.R.V.I.S. (Fasi 1 e 2)
+# Architettura di COSTRUCTO J.A.R.V.I.S. (Fasi 1, 2 e 3)
 
 Servizio **separato** da Costructo, con indirizzo e accesso propri. Costructo è uno dei suoi connettori
 (in sola lettura). Un solo utente: Luigi.
@@ -35,6 +35,8 @@ Servizio **separato** da Costructo, con indirizzo e accesso propri. Costructo è
 | `src/posta/` | Fase 2: caselle (`caselle.ts`, cifrate), controllo dei server (`rete.ts`), IMAP in sola lettura (`imap.ts`, imapflow), invio solo per le conferme (`uscita.ts`, nodemailer), lettura delle mail (`analisi.ts`, mailparser), archivio 30 giorni (`archivio.ts`), giro ogni 5 minuti (`lettura.ts`, `classifica.ts`, `rispostaAuto.ts`, `servizio.ts`), bozze (`bozze.ts`), strumenti (`strumentiPosta.ts`) — vedi [FASE2.md](FASE2.md) |
 | `src/calendarioApple.ts` | Fase 2: iCloud CalDAV in sola lettura (PROPFIND/REPORT con fetch, parser iCal esistente) |
 | `src/rotteFase2.ts` | API di caselle, Posta, bozze e calendario Apple |
+| `src/whatsapp/` | Fase 3: webhook pubblico firmato (`webhook.ts`), forma dei webhook con zod (`schema.ts`), elaborazione (`elabora.ts`), archivio 30 giorni (`archivio.ts`), collegamento cifrato (`collegamento.ts`), invio Meta/fornitore (`invio.ts`), azienda dei contatti (`attribuzione.ts`), riassunti (`classifica.ts`), conferme automatiche (`rispostaAuto.ts`), risposte con conferma (`risposte.ts`), giro ogni minuto (`servizio.ts`), strumenti (`strumentiWhatsapp.ts`), numeri (`telefono.ts`) — vedi [FASE3.md](FASE3.md) |
+| `src/rotteWhatsapp.ts` | API della pagina WhatsApp e di Impostazioni → WhatsApp |
 | `src/sicurezza/` | password (scrypt), TOTP, sessioni, limiti, cifratura, utente |
 | `public/` | PWA (`index.html`, `app.js`, `voce.js`, `api.js`, `sw.js`, manifest, icone) |
 | `public/classic/` | modalità Classic (`classic.js`, scena 3D/2D, suoni, frasi) |
@@ -56,7 +58,7 @@ Servizio **separato** da Costructo, con indirizzo e accesso propri. Costructo è
 |---|---|---|
 | Privato | solo privati | agenda privata, calendario personale (link iCal e calendari Apple privati), posta delle caselle private, ricordi privati, numero |
 | Lavoro | solo di lavoro | Costructo (lettura), calendari Apple delle aziende, posta delle caselle delle aziende, ricordi di lavoro, numero |
-| Tutto | entrambi | tutti |
+| Tutto | entrambi | tutti (WhatsApp: anche le chat «Da assegnare») |
 
 La separazione vale due volte: gli strumenti non vengono nemmeno offerti all'AI, e se l'AI li chiede comunque il motore dei permessi li nega.
 
@@ -67,6 +69,8 @@ La separazione vale due volte: gli strumenti non vengono nemmeno offerti all'AI,
 `registro`, `consumi` (token e costo per mese), `impostazioni`, `segreti` (cifrati), `conferme`, `iscrizioni_push`.
 Fase 2: `posta_stato` (ultimo UID e UIDVALIDITY per casella, esito dell'ultimo controllo, ultima notifica),
 `posta_messaggi` (30 giorni), `posta_bozze` (30 giorni), `posta_risposte_auto` (impronta del mittente + dominio, per i limiti).
+Fase 3: `wa_contatti` (numero o id utente, nomi, azienda o privato e da dove viene la scelta), `wa_messaggi` (30 giorni, id di
+WhatsApp unico: niente doppioni), `wa_risposte` (proposte, bozze, inviate), `wa_conferme_auto`, `wa_domande` («Di quale azienda è…?»).
 
 ## Il giro della posta (ogni 5 minuti, un solo giro alla volta)
 
@@ -79,6 +83,18 @@ Fase 2: `posta_stato` (ultimo UID e UIDVALIDITY per casella, esito dell'ultimo c
 ```
 La coda delle chiamate all'AI (`inCoda` in `consumi.ts`) è condivisa tra domande, riassunti e bozze: una chiamata per volta,
 spesa + stima ricontrollate prima di ognuna.
+
+## WhatsApp (Fase 3)
+
+```
+ Meta ──POST firmato──► /api/whatsapp/webhook (prima del controllo Origin; Host, 404 se spento, HMAC sul corpo grezzo, 2 MB, limite per IP)
+      ◄── 200 subito ──┘  └► coda: elabora (messaggi, eco, storico, stati, rubrica) → wa_messaggi
+ giro (2 minuti dopo l'ultimo messaggio, e ogni minuto):
+   azienda dei contatti (scelta di Luigi → numero in Costructo /controparti → domanda + notifica)
+   → classificazione (filtro gratuito + Haiku, una chat per richiesta, stessa coda e tetto)
+   → proposta «mi manda la fattura?» → conferme automatiche (se tutte le regole) → notifiche urgenti
+ Luigi: «Invia» + «Sì, manda» (o «Conferma» in chat) → invio.ts → Meta (graph.facebook.com/{versione}/{id}/messages) o fornitore
+```
 
 ## Contratto atteso da Costructo (`/api/assistente/v1`)
 
@@ -93,7 +109,8 @@ array o dentro un oggetto. Token: `Authorization: Bearer csa_…`. Chiavi lette:
 | `GET /v1/agenda?giorni=N` | lista di impegni |
 | `GET /v1/scadenze`, `/v1/documenti-in-scadenza`, `/v1/cantieri` | liste |
 | `GET /v1/cerca?q=` | risultati (passati all'AI come dati) |
-| `GET /v1/controparti`, `/v1/preventivi`, `/v1/ore`, `/v1/inventario` | previsti nel client, non ancora usati dagli strumenti |
+| `GET /v1/controparti` | Fase 3: `controparti[] {telefono}` per riconoscere di quale azienda è un numero WhatsApp (letto al massimo ogni 30 minuti) |
+| `GET /v1/preventivi`, `/v1/ore`, `/v1/inventario` | previsti nel client, non ancora usati dagli strumenti |
 
 ## Scelte per il cervello Claude
 
