@@ -13,8 +13,12 @@ import {
   provaAccesso, trovaCasella, leggiCaselle, nomeSpazio,
 } from "./posta/caselle.js";
 import { elencaMessaggi, leggiMessaggio, allegatiDi, segniDi } from "./posta/archivio.js";
+import { spaziDellaVista } from "./posta/strumentiPosta.js";
 import { creaBozza, proponiTestoBozza, bozzeDelMessaggio, MAX_TESTO_BOZZA, oggettoRisposta, destinatarioRisposta } from "./posta/bozze.js";
 import { ErroreApple, appleVisibile, collegaApple, scegliCalendari, scollegaApple, leggiApple, scopriCalendari, type FonteApple } from "./calendarioApple.js";
+
+/** Mail mostrate al massimo per ogni casella nella pagina Posta. */
+const PER_CASELLA = 100;
 
 export interface OpzioniRotte {
   db: Db;
@@ -111,20 +115,22 @@ export function montaRotteFase2(app: Express, o: OpzioniRotte): void {
     };
   };
   app.get("/api/posta/messaggi", (req, res) => {
-    const caselle = leggiCaselle(fonte);
-    const spazi = [...new Set(caselle.map((c) => c.spazio))];
+    // Rispetta la scheda aperta: Privato = solo caselle private, Lavoro = solo caselle delle aziende, Tutto = tutte.
+    const vista = (["privato", "lavoro", "tutto"] as const).find((v) => v === req.query.vista) ?? "tutto";
+    const visibili = leggiCaselle(fonte).filter((c) => spaziDellaVista(vista, [c]).length > 0);
+    const spazi = [...new Set(visibili.map((c) => c.spazio))].filter((s) => typeof req.query.spazio !== "string" || !req.query.spazio || s === req.query.spazio);
     const giorni = Math.max(1, Math.min(30, Number(req.query.giorni) || 7));
-    const lista = elencaMessaggi(db, {
-      spazi: typeof req.query.spazio === "string" && req.query.spazio ? spazi.filter((s) => s === req.query.spazio) : spazi,
-      caselle: typeof req.query.casella === "string" && req.query.casella ? [req.query.casella] : undefined,
-      soloUrgenti: req.query.soloUrgenti === "1",
-      giorni,
-      limite: 200,
-    });
-    const tetto = (db.prepare("SELECT COUNT(*) n FROM posta_messaggi WHERE stato = 'tetto'").get() as { n: number }).n;
+    // Un limite per casella (non uno solo per tutte): una casella piena non nasconde le altre.
+    const scelte = visibili.filter((c) => spazi.includes(c.spazio) && (typeof req.query.casella !== "string" || !req.query.casella || c.id === req.query.casella));
+    const lista = scelte
+      .flatMap((c) => elencaMessaggi(db, { spazi, caselle: [c.id], soloUrgenti: req.query.soloUrgenti === "1", giorni, limite: PER_CASELLA }))
+      .sort((a, b) => b.data - a.data);
+    const ids = visibili.map((c) => c.id);
+    const tetto = ids.length ? (db.prepare(`SELECT COUNT(*) n FROM posta_messaggi WHERE stato = 'tetto' AND casella_id IN (${ids.map(() => "?").join(",")})`).get(...ids) as { n: number }).n : 0;
     res.json({
       messaggi: lista.map((m) => vistaMail(m)),
-      caselle: caselleVisibili(fonte, dip.aziende()).map((c) => ({ id: c.id, nome: c.nome, tipo: c.tipo, spazio: c.spazio, nomeSpazio: c.nomeSpazio, stato: c.stato })),
+      vista,
+      caselle: caselleVisibili(fonte, dip.aziende()).filter((c) => visibili.some((v) => v.id === c.id)).map((c) => ({ id: c.id, nome: c.nome, tipo: c.tipo, spazio: c.spazio, nomeSpazio: c.nomeSpazio, stato: c.stato })),
       senzaRiassuntoPerTetto: tetto,
       confermeAutomaticheAttive: leggiImpostazioni(db).confermeAutomaticheAttive,
     });

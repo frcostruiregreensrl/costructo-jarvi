@@ -20,13 +20,37 @@ export function controllaNomeServer(host: string): string {
 }
 
 /**
- * Risolve il nome e restituisce un indirizzo verificato a cui collegarsi.
- * Basta un solo indirizzo interno (loopback, reti private, metadati dei cloud…) per bloccare.
+ * Risolve il nome e restituisce TUTTI gli indirizzi verificati, prima gli IPv4 (più spesso raggiungibili dai server).
+ * Basta un solo indirizzo interno (loopback, reti private, metadati dei cloud…) per bloccare tutto.
  */
-export async function indirizzoServer(host: string, risolvi: RisolviNome = risolviPredefinito): Promise<string> {
+export async function indirizziServer(host: string, risolvi: RisolviNome = risolviPredefinito): Promise<string[]> {
   const h = controllaNomeServer(host);
   let indirizzi: string[];
   try { indirizzi = await risolvi(h); } catch { throw new ErrorePosta("Server di posta non raggiungibile: controlla il nome del server."); }
   if (!indirizzi.length || indirizzi.some(ipPrivato)) throw new ErrorePosta("Il server di posta punta a un indirizzo non ammesso.");
-  return indirizzi[0];
+  return [...new Set(indirizzi)].sort((a, b) => isIP(a) - isIP(b));
+}
+
+/** Il primo indirizzo verificato (IPv4 se c'è). */
+export async function indirizzoServer(host: string, risolvi: RisolviNome = risolviPredefinito): Promise<string> {
+  return (await indirizziServer(host, risolvi))[0];
+}
+
+/** Errori di rete per cui ha senso provare l'indirizzo successivo (non password sbagliata, non TLS). */
+export function erroreDiRete(e: unknown): boolean {
+  const x = e as { code?: string; authenticationFailed?: boolean; tlsFailed?: boolean; responseCode?: number };
+  if (x?.authenticationFailed || x?.tlsFailed || x?.responseCode) return false;
+  return /^(ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EADDRNOTAVAIL|CONNECT_TIMEOUT|GREETING_TIMEOUT|ETIMEOUT|ECONNECTION|ESOCKET|NoConnection|EConnectionClosed)$/.test(String(x?.code));
+}
+
+/** Prova gli indirizzi in ordine: se uno non risponde passa al successivo; ogni altro errore si ferma subito. */
+export async function conPrimoRaggiungibile<T>(indirizzi: string[], prova: (ip: string) => Promise<T>): Promise<T> {
+  let ultimo: unknown = new ErrorePosta("Server di posta non raggiungibile.");
+  for (const ip of indirizzi) {
+    try { return await prova(ip); } catch (e) {
+      ultimo = e;
+      if (!erroreDiRete(e)) throw e;
+    }
+  }
+  throw ultimo;
 }

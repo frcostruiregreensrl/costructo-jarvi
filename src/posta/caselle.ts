@@ -6,7 +6,8 @@ import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { Db } from "../db.js";
 import type { Cifratore } from "../sicurezza/cifra.js";
-import { leggiSegreto, salvaSegreto, maschera } from "../impostazioni.js";
+import { leggiSegreto, salvaSegreto } from "../impostazioni.js";
+import { indirizzoPec } from "./analisi.js";
 import { controllaNomeServer } from "./rete.js";
 import { ErrorePosta, type AziendaPosta, type Casella, type DipendenzePosta, type Server, type TipoCasella } from "./tipi.js";
 
@@ -49,6 +50,18 @@ export type NuovaCasella = z.infer<typeof SchemaNuovaCasella>;
 
 export interface Fonte { db: Db; cifratore: Cifratore }
 
+/** Server che sono di gestori PEC (anche se la casella è stata messa come «altro»). */
+const SERVER_PEC = /(^|[.-])pec([.-]|$)|legalmail|postecert|postacert|arubapec|sicurezzapostale|registerpec|gigapec|pecveneto/i;
+/**
+ * Vero se la casella è una PEC: tipo «pec», oppure un server di un gestore PEC, oppure un indirizzo PEC.
+ * Per una PEC Jarvis non manda mai niente, qualunque tipo abbia scelto Luigi.
+ */
+export function casellaPec(c: Pick<Casella, "tipo" | "imap" | "smtp" | "utente">): boolean {
+  return c.tipo === "pec" || SERVER_PEC.test(c.imap.host) || (!!c.smtp && SERVER_PEC.test(c.smtp.host)) || indirizzoPec(c.utente);
+}
+/** Per l'interfaccia: della password si dice solo se c'è, mai nemmeno un carattere. */
+export const PASSWORD_NASCOSTA = "••••";
+
 /** Nome pulito: niente caratteri di controllo né < >, al massimo 60 caratteri. */
 const pulisciNome = (n: string) => n.replace(/[\u0000-\u001f\u007f<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
 
@@ -77,7 +90,7 @@ export function trovaCasella(f: Fonte, id: string): Casella | undefined {
 export interface StatoCasella { ultimoControllo: number; esito: string; messaggio: string }
 export interface CasellaVisibile {
   id: string; nome: string; tipo: TipoCasella; spazio: string; nomeSpazio: string;
-  imap: Server; smtp?: Server; utente: string; password: string; confermeAutomatiche: boolean; stato: StatoCasella;
+  imap: Server; smtp?: Server; utente: string; password: string; passwordImpostata: boolean; confermeAutomatiche: boolean; pec: boolean; stato: StatoCasella;
 }
 
 export function nomeSpazio(spazio: string, aziende: AziendaPosta[]): string {
@@ -93,8 +106,8 @@ export function statoCasella(db: Db, id: string): StatoCasella {
 export function caselleVisibili(f: Fonte, aziende: AziendaPosta[]): CasellaVisibile[] {
   return leggiCaselle(f).map((c) => ({
     id: c.id, nome: c.nome, tipo: c.tipo, spazio: c.spazio, nomeSpazio: nomeSpazio(c.spazio, aziende),
-    imap: c.imap, ...(c.smtp ? { smtp: c.smtp } : {}), utente: c.utente, password: maschera(c.password),
-    confermeAutomatiche: c.confermeAutomatiche, stato: statoCasella(f.db, c.id),
+    imap: c.imap, ...(c.smtp ? { smtp: c.smtp } : {}), utente: c.utente, password: c.password ? PASSWORD_NASCOSTA : "", passwordImpostata: !!c.password,
+    confermeAutomatiche: c.confermeAutomatiche, pec: casellaPec(c), stato: statoCasella(f.db, c.id),
   }));
 }
 
@@ -119,8 +132,9 @@ export function componiCasella(d: Omit<NuovaCasella, "password"> & { password: s
   } else {
     ({ imap, smtp } = PRESET[d.tipo]);
   }
-  // Mai conferme automatiche dalla PEC (valore legale); servono il server di uscita e una casella non PEC.
-  const confermeAutomatiche = d.tipo !== "pec" && !!d.confermeAutomatiche;
+  // Mai conferme automatiche dalla PEC (valore legale), anche se è stata messa come «altro».
+  const pec = casellaPec({ tipo: d.tipo, imap, smtp, utente });
+  const confermeAutomatiche = !pec && !!d.confermeAutomatiche;
   if (confermeAutomatiche && !smtp) throw new ErrorePosta("Per le conferme automatiche serve il server della posta in uscita (SMTP).");
   if (confermeAutomatiche && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(utente)) throw new ErrorePosta("Per le conferme automatiche il nome utente deve essere l'indirizzo email.");
   return { id, nome, tipo: d.tipo, spazio: d.spazio, imap: { ...imap }, ...(smtp ? { smtp: { ...smtp } } : {}), utente, password, confermeAutomatiche };
@@ -156,6 +170,12 @@ export async function modificaCasella(dip: DipendenzePosta, id: string, modifich
   const f = { db: dip.db, cifratore: dip.cifratore };
   const vecchia = trovaCasella(f, id);
   if (!vecchia) throw new ErrorePosta("Casella non trovata.", 404);
+  // Cambiare server, porte, tipo o indirizzo vuol dire mandare la password altrove: serve riscriverla.
+  const cambiaDestinazione = (modifiche.tipo !== undefined && modifiche.tipo !== vecchia.tipo)
+    || (modifiche.utente !== undefined && modifiche.utente.trim().toLowerCase() !== vecchia.utente.toLowerCase())
+    || (modifiche.imap !== undefined && (modifiche.imap.host.trim().toLowerCase() !== vecchia.imap.host || modifiche.imap.porta !== vecchia.imap.porta))
+    || (modifiche.smtp !== undefined && (modifiche.smtp.host.trim().toLowerCase() !== vecchia.smtp?.host || modifiche.smtp.porta !== vecchia.smtp?.porta));
+  if (cambiaDestinazione && !modifiche.password) throw new ErrorePosta("Hai cambiato server, tipo o indirizzo: scrivi di nuovo la password.");
   const nuova = componiCasella({
     nome: modifiche.nome ?? vecchia.nome,
     tipo: modifiche.tipo ?? vecchia.tipo,

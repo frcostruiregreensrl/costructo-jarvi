@@ -9,7 +9,7 @@
 import { z } from "zod";
 import type { Db } from "./db.js";
 import type { Cifratore } from "./sicurezza/cifra.js";
-import { leggiSegreto, salvaSegreto, maschera } from "./impostazioni.js";
+import { leggiSegreto, salvaSegreto } from "./impostazioni.js";
 import { analizzaIcs, occorrenze, type Occorrenza } from "./calendario.js";
 
 export const RADICE_ICLOUD = "https://caldav.icloud.com/";
@@ -47,10 +47,12 @@ function salvaApple(f: FonteApple, imp: ImpostazioniApple | null): void {
   cache.clear();
 }
 
-/** Per l'interfaccia: mai la password. */
+/** Per l'interfaccia: mai la password, nemmeno le ultime cifre. */
 export function appleVisibile(f: FonteApple) {
   const imp = leggiApple(f);
-  return imp ? { collegato: true, appleId: imp.appleId, password: maschera(imp.password), calendari: imp.calendari } : { collegato: false, appleId: "", password: "", calendari: [] as CalendarioApple[] };
+  return imp
+    ? { collegato: true, appleId: imp.appleId, password: "••••", passwordImpostata: true, calendari: imp.calendari }
+    : { collegato: false, appleId: "", password: "", passwordImpostata: false, calendari: [] as CalendarioApple[] };
 }
 
 // ---------------------------------------------------------------- richieste verso iCloud

@@ -21,6 +21,18 @@ export function salvaMessaggio(db: Db, d: DatiNuovo, ora = Date.now()): string |
   return r.changes ? id : null;
 }
 
+/**
+ * Se la casella ha già una mail con lo stesso Message-ID (per esempio dopo un cambio di UIDVALIDITY sul server),
+ * non se ne crea una copia: si aggiornano solo UID e UIDVALIDITY. Restituisce true se l'ha trovata.
+ */
+export function riallineaMessaggio(db: Db, casellaId: string, messageId: string, uid: number, uidValidity: string): boolean {
+  if (!messageId) return false;
+  const r = db.prepare("SELECT id FROM posta_messaggi WHERE casella_id = ? AND message_id = ? ORDER BY salvato LIMIT 1").get(casellaId, messageId) as { id: string } | undefined;
+  if (!r) return false;
+  db.prepare("UPDATE OR IGNORE posta_messaggi SET uid = ?, uid_validity = ? WHERE id = ?").run(uid, uidValidity, r.id);
+  return true;
+}
+
 export function leggiMessaggio(db: Db, id: string): MessaggioPosta | undefined {
   return db.prepare("SELECT * FROM posta_messaggi WHERE id = ?").get(id) as MessaggioPosta | undefined;
 }

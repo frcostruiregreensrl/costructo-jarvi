@@ -73,7 +73,7 @@ Fase 2: `posta_stato` (ultimo UID e UIDVALIDITY per casella, esito dell'ultimo c
 ```
  per ogni casella: EXAMINE INBOX → UID nuovi → FETCH BODY.PEEK (256 KB) → mailparser → posta_messaggi
  → filtro gratuito (newsletter, automatici, no-reply, ricevute PEC)
- → cervello (Haiku, gruppi da 8, max 40 per giro, stessa coda e stesso tetto delle domande) → riassunto, urgente, tocca
+ → cervello (Haiku, una mail per richiesta, max 40 per giro, stessa coda e stesso tetto delle domande) → riassunto, urgente, tocca
  → conferme automatiche (solo se TUTTE le regole lo permettono)
  → notifiche urgenti (1 ogni 30 minuti per casella)
 ```

@@ -99,7 +99,50 @@ export function segniDa(p: ParsedMail, indirizzo: string, pec: Segni["pec"]): Se
   if (NO_REPLY.test(locale)) s.noReply = true;
   if (/^(mailer-daemon|postmaster)$/i.test(locale)) s.automatico = true;
   if (pec) s.pec = pec;
+  // Autenticazione (SPF/DKIM/DMARC) letta SOLO nell'intestazione Authentication-Results più in alto,
+  // cioè quella aggiunta dal fornitore di posta di Luigi quando la mail è arrivata.
+  const prima = p.headerLines.find((h) => h.key.toLowerCase() === "authentication-results");
+  const esito = leggiAutenticazione(prima ? prima.line.replace(/^[^:]*:/, "") : "", indirizzo);
+  s.autenticato = esito.allineato;
+  if (esito.verificatoDa) s.verificatoDa = esito.verificatoDa;
   return s;
+}
+
+// ---------------------------------------------------------------- autenticazione del mittente
+const dominioDi = (indirizzo: string) => (indirizzo.split("@")[1] ?? "").toLowerCase().replace(/[>\s]+$/, "");
+/** Allineamento «rilassato» (DMARC): stesso dominio oppure uno è sottodominio dell'altro. */
+export function dominiAllineati(a: string, b: string): boolean {
+  const x = a.toLowerCase().replace(/^@/, ""), y = b.toLowerCase().replace(/^@/, "");
+  if (!x || !y) return false;
+  return x === y || x.endsWith(`.${y}`) || y.endsWith(`.${x}`);
+}
+
+/**
+ * Legge un'intestazione Authentication-Results (RFC 8601). Vale solo se c'è «dmarc=pass» (con header.from,
+ * se c'è, uguale al dominio del mittente) oppure «dkim=pass» con il dominio della firma (header.d o header.i)
+ * allineato al dominio del mittente. Tutto il resto (assente, illeggibile, fail, none, spf da solo) = NON autenticato.
+ */
+export function leggiAutenticazione(valore: string, daIndirizzo: string): { allineato: boolean; verificatoDa: string } {
+  const testo = valore.replace(/\(([^()]|\([^()]*\))*\)/g, " ").replace(/\s+/g, " ").trim();
+  if (!testo) return { allineato: false, verificatoDa: "" };
+  const [servizio, ...risultati] = testo.split(";");
+  const verificatoDa = (servizio ?? "").trim().split(/\s+/)[0].toLowerCase().slice(0, 100);
+  const da = dominioDi(daIndirizzo);
+  if (!da) return { allineato: false, verificatoDa };
+  for (const r of risultati) {
+    const parti = r.trim().toLowerCase();
+    const metodo = /^(dmarc|dkim)\s*=\s*(\w+)/.exec(parti);
+    if (!metodo || metodo[2] !== "pass") continue;
+    const prop = (nome: string) => new RegExp(`(?:^|\\s)${nome.replace(".", "\\.")}\\s*=\\s*"?([^\\s";]+)`).exec(parti)?.[1] ?? "";
+    if (metodo[1] === "dmarc") {
+      const hf = prop("header.from");
+      if (!hf || hf.replace(/^@/, "") === da) return { allineato: true, verificatoDa };
+    } else {
+      const d = prop("header.d") || dominioDi(prop("header.i")) || prop("header.i").replace(/^@/, "");
+      if (d && dominiAllineati(d, da)) return { allineato: true, verificatoDa };
+    }
+  }
+  return { allineato: false, verificatoDa };
 }
 
 // ---------------------------------------------------------------- lettura
@@ -139,9 +182,10 @@ export async function leggiMail(g: MessaggioGrezzo): Promise<MailLetta> {
     daNome = daNome.replace(/per conto di:?\s*/i, "").trim();
   }
 
-  const allegati = (g.allegati ?? p.attachments
-    .filter((a) => !(pec === "messaggio" && /^(postacert\.eml|daticert\.xml|smime\.p7s)$/i.test(a.filename ?? "")))
-    .map((a) => ({ nome: breve(a.filename ?? "allegato", 200), dimensione: a.size ?? 0 })))
+  // PEC: i file tecnici della busta (postacert.eml, daticert.xml, smime.p7s) non si mostrano, da qualunque parte arrivi l'elenco.
+  const tecnicoPec = (nome: string) => !!pec && /^(postacert\.eml|daticert\.xml|smime\.p7s)$/i.test(nome);
+  const allegati = (g.allegati ?? p.attachments.map((a) => ({ nome: breve(a.filename ?? "allegato", 200), dimensione: a.size ?? 0 })))
+    .filter((a) => !tecnicoPec(a.nome))
     .slice(0, 30);
   const data = p.date && Number.isFinite(p.date.getTime()) ? p.date.getTime() : g.data?.getTime() ?? Date.now();
   return {
@@ -173,6 +217,11 @@ export function prefiltra(m: { oggetto: string; daNome: string; daIndirizzo: str
 // Se una di queste parole compare in oggetto o testo, la mail NON riceve mai una conferma automatica
 // (anche se l'AI dice il contrario). Nel dubbio si preferisce non mandare niente.
 const PAROLE_DENARO = new RegExp([
+  // abbreviazioni e forme italiane
+  "fatt", "ft", "pagher\\w*", "pagam\\w*", "totale", "totali", "bancari\\w*", "banca", "pagabile",
+  // inglese
+  "invoices?", "invoiced", "payments?", "pay", "paid", "paying", "payable", "quotes?", "quotations?", "orders?", "contracts?",
+  "prices?", "pricing", "deadlines?", "amounts?", "wire", "bank", "billing", "bills?", "fees?", "refunds?", "costs?", "balance", "usd",
   "euro", "eur", "importi?", "pagament[oi]", "pagare", "pagato", "pagata", "paga", "bonific[oi]", "fattur[ae]", "fatturazione", "preventiv[oi]",
   "scadenz[ae]", "scade", "scaduto", "scaduta", "contratt[oi]", "ordin[ei]", "ordinativo", "penal[ei]", "sollecit[oi]", "iban", "saldo", "acconto",
   "caparra", "rat[ae]", "addebit[oi]", "accredit[oi]", "offert[ae]", "quotazione", "prezz[oi]", "cost[oi]", "sconto", "nota di credito", "ddt",
@@ -180,11 +229,19 @@ const PAROLE_DENARO = new RegExp([
   "impegnarsi", "garanzia", "fideiussione", "cauzione", "pos", "ricevuta di pagamento", "rimborso", "debito", "credito", "versamento",
 ].map((p) => `\\b${p}\\b`).join("|"), "i");
 const SIMBOLI_DENARO = /[€$£]|\b\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?\b|\b\d+,\d{2}\b|\b\d+(?:[.,]\d+)?\s?(?:k€|keur|mila euro)\b/i;
+// «due» da solo in italiano vuol dire «2»: in inglese conta solo dentro le frasi tipiche delle scadenze.
+const FRASI_INGLESI = /\b(payment|amount|balance|invoice)\s+(is\s+)?due\b|\bdue\s+(date|by|on|amount|immediately|today|now)\b|\bpast\s+due\b|\boverdue\b/i;
+/** Un numero di almeno 3 cifre vicino (entro 25 caratteri) a una parola di denaro. */
+const NUMERO_VICINO = /\b(totale|importo|saldo|acconto|caparra|rata|prezzo|costo|euro|eur|amount|total|price|cost)\b\D{0,25}\d{3,}|\d{3,}\D{0,10}\b(euro|eur|usd)\b/i;
 
-/** Vero se oggetto o testo parlano di soldi, importi, pagamenti o impegni (controllo senza AI). */
+/**
+ * Vero se oggetto, testo o nomi degli allegati parlano di soldi, importi, pagamenti o impegni (controllo senza AI).
+ * `_`, `-` e `.` valgono come spazi («Fattura_123.pdf», «fatt. n. 12»).
+ */
 export function parlaDiDenaro(...testi: string[]): boolean {
   const t = testi.join("\n");
-  return PAROLE_DENARO.test(t) || SIMBOLI_DENARO.test(t);
+  const separato = t.replace(/[_.\-]+/g, " ");
+  return PAROLE_DENARO.test(separato) || PAROLE_DENARO.test(t) || SIMBOLI_DENARO.test(t) || FRASI_INGLESI.test(separato) || NUMERO_VICINO.test(t) || NUMERO_VICINO.test(separato);
 }
 
 /** Domini delle caselle PEC più comuni: a un indirizzo PEC non si risponde mai in automatico. */

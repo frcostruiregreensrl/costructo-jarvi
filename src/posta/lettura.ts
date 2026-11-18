@@ -1,9 +1,11 @@
 // Lettura delle mail nuove di una casella (Posta in arrivo), dall'ultimo UID visto.
 // Primo controllo (o casella «ricreata» sul server, UIDVALIDITY diverso): gli ultimi 7 giorni, al massimo 200 mail.
+// Con UIDVALIDITY diverso le mail già salvate si riconoscono dal Message-ID: niente doppioni, niente nuove notifiche
+// e niente conferme automatiche (le mail di un primo controllo non sono mai «nuove»).
 // La casella si apre in SOLA LETTURA e i messaggi si scaricano con BODY.PEEK: niente diventa «letto».
 import { registra } from "../registro.js";
 import { leggiMail, MAX_SORGENTE_BYTE } from "./analisi.js";
-import { salvaMessaggio, leggiStatoLettura, scriviStatoLettura } from "./archivio.js";
+import { salvaMessaggio, leggiStatoLettura, scriviStatoLettura, riallineaMessaggio } from "./archivio.js";
 import type { Casella, DipendenzePosta } from "./tipi.js";
 
 export const GIORNI_PRIMO_CONTROLLO = 7;
@@ -41,6 +43,7 @@ export async function leggiNuove(dip: DipendenzePosta, c: Casella): Promise<Esit
         ultimo = Math.max(ultimo, g.uid);
         try {
           const mail = await leggiMail(g);
+          if (riallineaMessaggio(dip.db, c.id, mail.messageId, g.uid, box.uidValidity)) continue;
           const id = salvaMessaggio(dip.db, { casellaId: c.id, uid: g.uid, uidValidity: box.uidValidity, spazio: c.spazio, nuova: !primo, mail }, ora);
           if (id) nuove.push(id);
         } catch {
@@ -48,7 +51,8 @@ export async function leggiNuove(dip: DipendenzePosta, c: Casella): Promise<Esit
         }
       }
     }
-    if (primo && !uids.length) ultimo = Math.max(0, box.uidNext - 1);
+    // Casella vuota negli ultimi 7 giorni: si parte dall'ultimo UID (da UIDNEXT, o chiedendolo se il server non lo dice).
+    if (primo && !uids.length) ultimo = box.uidNext > 0 ? box.uidNext - 1 : await conn.ultimoUid();
     scriviStatoLettura(dip.db, c.id, { uidValidity: box.uidValidity, ultimoUid: ultimo, esito: "ok", messaggio: nuove.length ? `${nuove.length} ${nuove.length === 1 ? "nuova" : "nuove"}` : "nessuna novità" }, ora);
     if (nuove.length) registra(dip.db, "posta.leggi", "fatto", "sistema", { casella: c.nome, nuove: nuove.length, primoControllo: primo });
     return { casella: c.id, nuove };

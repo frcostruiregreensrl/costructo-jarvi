@@ -85,6 +85,7 @@ test("Calendario Apple via API: Apple ID e password cifrati e mai restituiti, sc
     assert.equal(stato.collegato, true);
     assert.equal(stato.calendari.length, 2);
     assert.ok(!JSON.stringify(stato).includes(APP_PASSWORD), "la password non torna al browser");
+    assert.ok(!JSON.stringify(stato).includes("mnop") && stato.password === "••••" && stato.passwordImpostata, "nemmeno le ultime cifre");
     const grezzo = a.db.prepare("SELECT valore FROM segreti WHERE nome = 'calendario_apple'").get() as { valore: string };
     assert.ok(!grezzo.valore.includes(APP_PASSWORD) && !grezzo.valore.includes(APPLE_ID), "cifrato nel database");
     assert.ok(!JSON.stringify(a.db.prepare("SELECT * FROM registro").all()).includes(APP_PASSWORD));

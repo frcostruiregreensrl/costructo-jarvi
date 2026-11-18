@@ -114,6 +114,11 @@
       <section id="pagina-posta" class="pagina" hidden aria-labelledby="titoloPosta">
         <h1 id="titoloPosta">Posta</h1>
         <p class="sotto">Le mail delle tue caselle, divise per azienda e privato. Jarvis le legge e le riassume: non le segna come lette, non le sposta e non le cancella. Le bozze le mandi tu dalla tua app di posta.</p>
+        <div class="schede" role="tablist" aria-label="Quali caselle">
+          <button role="tab" data-vista="privato" aria-selected="false">Privato</button>
+          <button role="tab" data-vista="lavoro" aria-selected="false">Lavoro</button>
+          <button role="tab" data-vista="tutto" aria-selected="true">Tutto</button>
+        </div>
         <div class="riga-filtri">
           <label>Periodo
             <select id="postaGiorni">

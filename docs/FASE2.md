@@ -24,7 +24,7 @@ Esclusi: merge, deploy, Railway, database di produzione, caselle e account veri.
 |---|---|
 | **Legge la posta** | Ogni 5 minuti (e con «Aggiorna ora» nella pagina Posta) guarda la Posta in arrivo di ogni casella e prende solo le mail nuove. La prima volta: gli ultimi 7 giorni, al massimo 200 mail. La casella si apre in **sola lettura** e le mail si scaricano senza segnarle come lette. |
 | **Salva poco** | Per ogni mail: mittente, destinatari, oggetto, data, un testo breve (al massimo 4 KB, senza HTML), i **nomi** degli allegati (non il contenuto). Più il riassunto, l'urgenza e se parla di soldi o impegni. Tutto si cancella dopo 30 giorni. |
-| **Riassume e segnala le urgenze** | Prima un filtro gratuito (newsletter, mailing list, messaggi automatici, no-reply, ricevute PEC: niente AI, mai urgenti). Le altre vanno a Claude Haiku a gruppi di 8, con lo stesso tetto di spesa delle domande. Al tetto le mail restano senza riassunto e la pagina Posta lo dice. |
+| **Riassume e segnala le urgenze** | Prima un filtro gratuito (newsletter, mailing list, messaggi automatici, no-reply, ricevute PEC: niente AI, mai urgenti). Le altre vanno a Claude Haiku **una per richiesta** (così una mail non può influenzare il giudizio sulle altre), con lo stesso tetto di spesa delle domande. «Parla di soldi o impegni» non scende mai sotto il controllo senza AI; una PEC non consegnata è sempre urgente. Al tetto le mail restano senza riassunto e la pagina Posta lo dice. |
 | **PEC** | Riconosce la busta («Per conto di…») e legge il messaggio vero dentro `postacert.eml`; riconosce le ricevute di accettazione e di consegna. |
 | **Bozze** | «Prepara bozza di risposta» nella pagina Posta, oppure a voce («prepara una risposta alla mail di Rossi»). La bozza va in Jarvis **e** nella cartella Bozze della casella (Gmail «[Gmail]/Bozze», Aruba «Bozze»), con il segno di bozza. **Non viene mai inviata**: la mandi tu dalla tua app di posta. A voce serve sempre il pulsante «Conferma». |
 | **Conferme automatiche** | Solo se le accendi tu (vedi sotto). |
@@ -54,16 +54,24 @@ aziende; in **Tutto** tutte. Se «la mail di Rossi» c'è in due aziende, Jarvis
 
 Partono solo se tutto questo è vero (nel dubbio non partono):
 
-1. la casella è Gmail o «altro» (mai PEC);
-2. la mail è arrivata dopo il primo controllo, da meno di 2 giorni, ed è stata riassunta dall'AI;
-3. l'AI dice che **non** parla di pagamenti, importi o impegni **e** il controllo senza AI non trova parole come euro, €,
-   importo, pagamento, bonifico, fattura, preventivo, scadenza, contratto, ordine, penale, sollecito, IBAN, saldo,
-   acconto, rata, offerta, prezzo, costo, firma, impegno, cifre con i decimali…;
-4. il mittente non è no-reply, una mailing list, una newsletter, un messaggio automatico (`Auto-Submitted`,
+1. la casella è Gmail o «altro» (mai PEC: anche una PEC messa come «altro», riconosciuta dal server — pec., legalmail,
+   postecert, arubapec… — o dall'indirizzo PEC, non manda mai niente);
+2. il mittente è **autenticato**: nell'intestazione `Authentication-Results` più in alto (scritta dal fornitore di posta
+   di Luigi all'arrivo; per Gmail `mx.google.com`) c'è `dmarc=pass`, oppure `dkim=pass` con il dominio della firma allineato
+   a quello del mittente. Se manca o non si legge: niente conferma (così nessuno può farla partire verso un indirizzo falsificato);
+3. la mail è arrivata dopo il primo controllo, da meno di 2 giorni, ed è stata riassunta dall'AI;
+4. l'AI dice che **non** parla di pagamenti, importi o impegni **e** il controllo senza AI non trova niente in oggetto,
+   testo e **nomi degli allegati** (`_`, `-` e `.` valgono come spazi: «Fattura_123.pdf», «fatt. n. 12»): parole come euro, €, EUR,
+   importo, pagamento, pagherò, bonifico, fattura, fatt., ft., preventivo, scadenza, contratto, ordine, penale, sollecito,
+   IBAN, totale, saldo, acconto, caparra, rata, offerta, prezzo, costo, firma, impegno; in inglese invoice, payment, pay,
+   quote, quotation, order, contract, price, deadline, amount, wire, bank, «payment due»…; cifre con i decimali o con la valuta,
+   numeri di almeno 3 cifre vicino a parole di denaro;
+5. il mittente non è no-reply, una mailing list, una newsletter, un messaggio automatico (`Auto-Submitted`,
    `Precedence: bulk/list`, `List-*`), un indirizzo PEC o una delle tue caselle; se c'è un «Rispondi a», è dello stesso dominio;
-5. non è già partita una conferma allo stesso mittente negli ultimi 7 giorni, e oggi non ne sono partite già 20.
+6. non è già partita una conferma allo stesso mittente negli ultimi 7 giorni, e oggi non ne sono partite già 20.
 
-Testo (fisso, non scritto dall'AI), oggetto «Ricevuto: …», con `Auto-Submitted: auto-replied`, `In-Reply-To` e `References`:
+Oggetto e testo **fissi** (non si ripete l'oggetto del mittente, niente scritto dall'AI): oggetto «Conferma di ricezione
+del suo messaggio», con `Auto-Submitted: auto-replied`, `In-Reply-To` e `References`:
 
 > Buongiorno,
 > confermiamo di aver ricevuto il suo messaggio. Le risponderemo appena possibile.
@@ -137,13 +145,25 @@ Test (nessuna rete, nessuna casella vera): `test/posta.test.ts`, `test/calendari
 
 | Prova | Esito |
 |---|---|
-| `npm test` | **102/102** (78 di prima + 24 nuovi) |
+| `npm test` | **111/111** (78 di prima + 33 nuovi, di cui 9 dopo la revisione di sicurezza) |
 | `npx tsc --noEmit` | nessun errore |
 | `npm run build` e avvio di `node dist/server.js` | funzionano; i tre pacchetti restano esterni come gli altri |
 | `node script/prova-interfaccia.mjs` (390/1280 px, chiaro/scuro) | **48/48** (35 di prima + 13 nuovi su Posta, bozza, caselle) |
 
 Pacchetti installati (versione esatta, pubblicati da più di 2 settimane, tipi già inclusi: nessun `@types` aggiunto):
 `imapflow` 2.10.0, `mailparser` 3.14.1, `nodemailer` 10.3.1.
+
+## Correzioni dopo la revisione di sicurezza
+
+1. Conferme automatiche solo a mittenti autenticati (DMARC o DKIM allineato nell'Authentication-Results più in alto); oggetto fisso.
+2. Una PEC messa come «altro» (server o indirizzo PEC) è trattata come PEC: niente conferme, invio rifiutato.
+3. Controllo del denaro più largo: nomi degli allegati, separatori `_ - .`, inglese, abbreviazioni, numeri vicino a parole di denaro.
+4. Una mail per richiesta all'AI; «tocca» mai sotto il controllo senza AI, vero se la risposta non si legge.
+5. Le password non tornano al browser nemmeno in parte: solo «••••» e `passwordImpostata` (le ultime cifre restano solo per i token di Costructo).
+6. Cambiare server, porte, tipo o indirizzo di una casella richiede di riscrivere la password.
+7. Tutti gli indirizzi verificati del server, prima IPv4, con ripiego solo se un indirizzo non risponde.
+8. Server senza UIDNEXT: l'ultimo UID si chiede al server; cambio di UIDVALIDITY: niente doppioni (Message-ID), niente nuove notifiche o conferme.
+Inoltre: i file tecnici della PEC non compaiono tra gli allegati; la pagina Posta ha le schede Privato/Lavoro/Tutto e un limite di 100 mail per casella.
 
 ## Da sapere / aperto
 

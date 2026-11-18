@@ -1,4 +1,7 @@
-// Riassunto e urgenza delle mail nuove con il «cervello» (Claude Haiku di serie), a piccoli gruppi.
+// Riassunto e urgenza delle mail nuove con il «cervello» (Claude Haiku di serie), UNA MAIL PER RICHIESTA:
+// così il testo di una mail non può influenzare il giudizio sulle altre (con Haiku il costo in più è minimo:
+// il prompt di sistema è corto, circa 400 token per mail in più). In ogni caso «tocca» non scende mai sotto
+// il controllo senza AI, e se la risposta non si legge la mail resta «tocca» (nel dubbio: niente conferme).
 // Prima il filtro gratuito (newsletter, automatici, no-reply, ricevute PEC: niente AI). Poi l'AI, che passa
 // dalla STESSA coda e dallo STESSO tetto di spesa delle domande di Luigi: se il tetto è raggiunto le mail
 // restano senza riassunto (stato «tetto») e si riprovano al giro dopo.
@@ -11,11 +14,12 @@ import { marcaDati, ETICHETTA } from "../dati.js";
 import { leggiImpostazioni } from "../impostazioni.js";
 import { registra } from "../registro.js";
 import { prefiltra, parlaDiDenaro } from "./analisi.js";
-import { segniDi } from "./archivio.js";
+import { segniDi, allegatiDi } from "./archivio.js";
 import { leggiCaselle, nomeSpazio } from "./caselle.js";
 import type { DipendenzePosta, MessaggioPosta } from "./tipi.js";
 
-export const PER_GRUPPO = 8;
+/** Mail per richiesta: 1 (isolamento). Il codice regge anche gruppi più grandi, ma non si usano. */
+export const PER_GRUPPO = 1;
 /** Mail classificate al massimo per giro (le altre al giro dopo: la coda resta libera per Luigi). */
 export const MAX_PER_GIRO = 40;
 const MAX_TENTATIVI = 3;
@@ -70,7 +74,7 @@ export async function classificaNuove(dip: DipendenzePosta, limite = MAX_PER_GIR
   const filtra = db.prepare("UPDATE posta_messaggi SET stato = 'filtrato', riassunto = ?, urgente = 0, motivo = '', tocca = ? WHERE id = ?");
   for (const m of attesa) {
     const f = prefiltra({ oggetto: m.oggetto, daNome: m.da_nome, daIndirizzo: m.da_indirizzo, segni: segniDi(m) });
-    if (f.filtrato) { filtra.run(breve(f.riassunto, 300), parlaDiDenaro(m.oggetto, m.estratto) ? 1 : 0, m.id); esito.filtrate++; }
+    if (f.filtrato) { filtra.run(breve(f.riassunto, 300), parlaDiDenaro(m.oggetto, m.estratto, ...allegatiDi(m).map((a) => a.nome)) ? 1 : 0, m.id); esito.filtrate++; }
     else perAi.push(m);
   }
   if (!perAi.length) {
@@ -89,7 +93,8 @@ export async function classificaNuove(dip: DipendenzePosta, limite = MAX_PER_GIR
   const aziende = dip.aziende();
   const imp = leggiImpostazioni(db);
   const aggiorna = db.prepare("UPDATE posta_messaggi SET stato = 'classificato', riassunto = ?, urgente = ?, motivo = ?, tocca = ? WHERE id = ?");
-  const tentativo = db.prepare(`UPDATE posta_messaggi SET tentativi = tentativi + 1,
+  // Risposta mancante o illeggibile: si riprova; dopo 3 volte «errore» e, nel dubbio, «tocca» resta vero.
+  const tentativo = db.prepare(`UPDATE posta_messaggi SET tentativi = tentativi + 1, tocca = 1,
     stato = CASE WHEN tentativi + 1 >= ${MAX_TENTATIVI} THEN 'errore' ELSE 'da_classificare' END WHERE id = ?`);
   const mettiInTetto = db.prepare("UPDATE posta_messaggi SET stato = 'tetto' WHERE id = ?");
 
@@ -144,8 +149,12 @@ export async function classificaNuove(dip: DipendenzePosta, limite = MAX_PER_GIR
       const v = voci.find((x) => x.n === n + 1);
       if (!v) { tentativo.run(m.id); esito.senzaRiassunto++; continue; }
       // «tocca» è vero se lo dice l'AI OPPURE se il controllo senza AI trova parole di denaro o impegni.
-      const tocca = v.tocca || parlaDiDenaro(m.oggetto, m.estratto);
-      aggiorna.run(breve(v.riassunto, 300) || breve(m.oggetto, 200), v.urgente ? 1 : 0, v.urgente ? breve(v.motivo, 200) : "", tocca ? 1 : 0, m.id);
+      const tocca = v.tocca || parlaDiDenaro(m.oggetto, m.estratto, ...allegatiDi(m).map((a) => a.nome));
+      // Urgenza fissa senza AI: una PEC non accettata o non consegnata è sempre urgente (l'AI non può abbassarla).
+      const pecFallita = ["mancata_consegna", "non_accettazione", "errore"].includes(segniDi(m).pec ?? "");
+      const urgente = v.urgente || pecFallita;
+      const motivo = v.urgente ? breve(v.motivo, 200) : pecFallita ? "PEC non consegnata o non accettata" : "";
+      aggiorna.run(breve(v.riassunto, 300) || breve(m.oggetto, 200), urgente ? 1 : 0, motivo, tocca ? 1 : 0, m.id);
       esito.classificate++;
     }
   }

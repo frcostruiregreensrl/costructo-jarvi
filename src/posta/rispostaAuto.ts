@@ -1,28 +1,33 @@
 // Conferme di ricezione automatiche (autonomia livello 2, decisione di Luigi).
 // Partono SOLO se TUTTE queste condizioni sono vere (nel dubbio: niente):
 //  - l'interruttore generale «Conferme automatiche» nelle Impostazioni è acceso (spento di serie);
-//  - la casella è Gmail o «altro» con le conferme accese: MAI da una PEC (valore legale);
+//  - la casella è Gmail o «altro» con le conferme accese: MAI da una PEC (valore legale), nemmeno se messa come «altro»;
+//  - il mittente è AUTENTICATO: nell'Authentication-Results più in alto (scritto dal fornitore di Luigi; per Gmail
+//    mx.google.com) c'è dmarc=pass oppure dkim=pass con il dominio allineato a quello del mittente. Senza: niente
+//    (altrimenti chiunque potrebbe far partire conferme verso un indirizzo falsificato nel From);
 //  - la mail è arrivata dopo il primo controllo, da meno di 2 giorni, ed è stata classificata dall'AI;
 //  - l'AI dice che NON parla di pagamenti, importi o impegni E il controllo senza AI non trova parole di denaro;
 //  - il mittente non è no-reply, una mailing list, un messaggio automatico (Auto-Submitted, Precedence, List-*),
 //    una PEC o una delle caselle di Luigi; Reply-To, se c'è, è dello stesso dominio;
 //  - al massimo una conferma per mittente ogni 7 giorni e al massimo 20 al giorno in tutto.
-// Il testo è fisso (nessun contenuto scritto dall'AI). Intestazioni: Auto-Submitted: auto-replied, In-Reply-To, References.
+// Oggetto e testo sono FISSI (non si ripete l'oggetto del mittente, nessun contenuto scritto dall'AI).
+// Intestazioni: Auto-Submitted: auto-replied, In-Reply-To, References.
 // Ogni conferma finisce nel registro con il solo dominio del destinatario, la casella e il motivo.
 import { createHash } from "node:crypto";
 import { leggiImpostazioni } from "../impostazioni.js";
 import { registra } from "../registro.js";
 import { inizioGiorno } from "../tempo.js";
 import { parlaDiDenaro, indirizzoPec } from "./analisi.js";
-import { segniDi } from "./archivio.js";
-import { leggiCaselle } from "./caselle.js";
+import { segniDi, allegatiDi } from "./archivio.js";
+import { leggiCaselle, casellaPec } from "./caselle.js";
 import type { Casella, DipendenzePosta, MailInUscita, MessaggioPosta } from "./tipi.js";
 
 export const MAX_AL_GIORNO = 20;
 export const GIORNI_PER_MITTENTE = 7;
 const ETA_MASSIMA_MS = 2 * 864e5;
 
-export const OGGETTO_CONFERMA = (oggetto: string) => `Ricevuto: ${oggetto || "il suo messaggio"}`.slice(0, 200);
+/** Oggetto fisso: non si ripete mai l'oggetto scritto dal mittente (potrebbe contenere link o testo ingannevole). */
+export const OGGETTO_CONFERMA = "Conferma di ricezione del suo messaggio";
 export const TESTO_CONFERMA = [
   "Buongiorno,",
   "",
@@ -43,14 +48,16 @@ export function valutaConferma(dip: Pick<DipendenzePosta, "db" | "cifratore" | "
   const ora = dip.ora?.() ?? Date.now();
   const no = (motivo: string): Valutazione => ({ invia: false, motivo });
   if (!leggiImpostazioni(dip.db).confermeAutomaticheAttive) return no("interruttore generale spento");
-  if (c.tipo === "pec") return no("casella PEC: mai conferme automatiche");
+  if (casellaPec(c)) return no("casella PEC: mai conferme automatiche");
   if (!c.confermeAutomatiche || !c.smtp) return no("conferme spente per questa casella");
   if (!m.nuova) return no("mail del primo controllo");
   if (ora - m.data > ETA_MASSIMA_MS || ora - m.salvato > ETA_MASSIMA_MS) return no("mail troppo vecchia");
   if (m.stato !== "classificato") return no("mail non classificata dall'AI");
   if (m.tocca) return no("parla di pagamenti, importi o impegni");
-  if (parlaDiDenaro(m.oggetto, m.estratto)) return no("contiene parole di denaro o impegni");
+  if (parlaDiDenaro(m.oggetto, m.estratto, ...allegatiDi(m).map((a) => a.nome))) return no("contiene parole di denaro o impegni (anche negli allegati)");
   const s = segniDi(m);
+  if (!s.autenticato) return no("mittente non autenticato (manca dmarc=pass o dkim=pass allineato)");
+  if (c.tipo === "gmail" && s.verificatoDa !== "mx.google.com") return no("autenticazione non scritta da Gmail");
   if (s.lista) return no("mailing list o invio di massa");
   if (s.automatico) return no("messaggio automatico");
   if (s.noReply) return no("mittente no-reply");
@@ -72,7 +79,7 @@ export function componiConferma(m: MessaggioPosta): MailInUscita {
   const riferimenti = [m.riferimenti, m.message_id].filter(Boolean).join(" ").trim();
   return {
     a: m.da_indirizzo,
-    oggetto: OGGETTO_CONFERMA(m.oggetto),
+    oggetto: OGGETTO_CONFERMA,
     testo: TESTO_CONFERMA,
     ...(m.message_id ? { inReplyTo: m.message_id } : {}),
     ...(riferimenti ? { references: riferimenti } : {}),

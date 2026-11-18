@@ -43,8 +43,10 @@ export interface MessaggioGrezzo {
  * L'unica scrittura è aggiungere una bozza (con il segno \Draft) nella cartella Bozze.
  */
 export interface ConnessioneImap {
-  /** Apre la Posta in arrivo in SOLA LETTURA (EXAMINE). */
+  /** Apre la Posta in arrivo in SOLA LETTURA (EXAMINE). `uidNext` è 0 se il server non lo dice. */
   apriInbox(): Promise<{ uidValidity: string; uidNext: number }>;
+  /** UID più alto della Posta in arrivo (0 se è vuota): serve quando il server non dice UIDNEXT. */
+  ultimoUid(): Promise<number>;
   /** UID dei messaggi arrivati da quella data in poi. */
   cercaDal(data: Date): Promise<number[]>;
   /** UID maggiori di `uid`. */
@@ -126,6 +128,10 @@ export interface Segni {
   noReply?: boolean;
   /** PEC: busta di trasporto o ricevuta (accettazione, consegna…). */
   pec?: "messaggio" | "accettazione" | "consegna" | "non_accettazione" | "mancata_consegna" | "presa_in_carico" | "errore";
+  /** Mittente autenticato (dmarc=pass o dkim=pass allineato) nell'Authentication-Results più in alto. */
+  autenticato?: boolean;
+  /** Chi ha scritto quell'Authentication-Results (es. mx.google.com). */
+  verificatoDa?: string;
 }
 
 export class ErrorePosta extends Error {

@@ -6,7 +6,7 @@
 // - Ci si collega solo all'indirizzo verificato (niente rete interna), con il nome del server per il certificato TLS.
 import { ImapFlow, type ImapFlowOptions } from "imapflow";
 import type { RisolviNome } from "../calendario.js";
-import { indirizzoServer } from "./rete.js";
+import { indirizziServer, conPrimoRaggiungibile } from "./rete.js";
 import { ErrorePosta, type ApriImap, type Casella, type ConnessioneImap, type MessaggioGrezzo } from "./tipi.js";
 
 /** Le sole operazioni di imapflow che Jarvis usa (serve anche ai test con un client finto). */
@@ -18,7 +18,7 @@ export interface ClientImap {
   getMailboxLock(percorso: string, opzioni: { readOnly: true }): Promise<{ release(): void }>;
   mailbox: false | { uidValidity: bigint | number | string; uidNext: number } | unknown;
   search(q: Record<string, unknown>, o: { uid: true }): Promise<number[] | false | undefined>;
-  fetch(range: string, q: Record<string, unknown>, o: { uid: true }): AsyncIterable<{
+  fetch(range: string, q: Record<string, unknown>, o?: { uid: true }): AsyncIterable<{
     uid: number; source?: Buffer; size?: number; internalDate?: Date | string; bodyStructure?: Struttura;
   }>;
   list(): Promise<Array<{ path: string; name: string; specialUse?: string; flags?: Set<string> }>>;
@@ -66,16 +66,23 @@ export interface OpzioniImap {
 export function creaApriImap(opz: OpzioniImap = {}): ApriImap {
   const creaClient = opz.creaClient ?? ((o: ImapFlowOptions) => new ImapFlow(o) as unknown as ClientImap);
   return async (c: Casella): Promise<ConnessioneImap> => {
-    const ip = await indirizzoServer(c.imap.host, opz.risolvi);
-    const client = creaClient({
-      host: ip, servername: c.imap.host, port: c.imap.porta, secure: true,
-      auth: { user: c.utente, pass: c.password },
-      tls: { servername: c.imap.host, minVersion: "TLSv1.2", rejectUnauthorized: true },
-      logger: false, disableAutoIdle: true, connectionTimeout: 20_000, greetingTimeout: 15_000, socketTimeout: 90_000,
-      clientInfo: { name: "Jarvis" },
-    });
-    client.on("error", () => { /* gli errori arrivano anche dalle chiamate: qui si evita solo che il processo cada */ });
-    try { await client.connect(); } catch (e) { try { client.close(); } catch { /* già chiuso */ } throw spiegaErroreImap(e, c); }
+    const indirizzi = await indirizziServer(c.imap.host, opz.risolvi);
+    // Si provano tutti gli indirizzi verificati (prima IPv4): se uno non risponde, il successivo.
+    let client: ClientImap;
+    try {
+      client = await conPrimoRaggiungibile(indirizzi, async (ip) => {
+        const cl = creaClient({
+          host: ip, servername: c.imap.host, port: c.imap.porta, secure: true,
+          auth: { user: c.utente, pass: c.password },
+          tls: { servername: c.imap.host, minVersion: "TLSv1.2", rejectUnauthorized: true },
+          logger: false, disableAutoIdle: true, connectionTimeout: 20_000, greetingTimeout: 15_000, socketTimeout: 90_000,
+          clientInfo: { name: "Jarvis" },
+        });
+        cl.on("error", () => { /* gli errori arrivano anche dalle chiamate: qui si evita solo che il processo cada */ });
+        try { await cl.connect(); } catch (e) { try { cl.close(); } catch { /* già chiuso */ } throw e; }
+        return cl;
+      });
+    } catch (e) { throw spiegaErroreImap(e, c); }
     let blocco: { release(): void } | null = null;
     const prova = async <T>(f: () => Promise<T>): Promise<T> => { try { return await f(); } catch (e) { throw spiegaErroreImap(e, c); } };
     return {
@@ -83,6 +90,13 @@ export function creaApriImap(opz: OpzioniImap = {}): ApriImap {
         blocco = await client.getMailboxLock("INBOX", { readOnly: true });
         const box = client.mailbox as { uidValidity: bigint | number | string; uidNext: number };
         return { uidValidity: String(box.uidValidity), uidNext: Number(box.uidNext) || 0 };
+      }),
+      // «*» come numero di sequenza = l'ultimo messaggio della casella: se ne legge solo l'UID.
+      ultimoUid: () => prova(async () => {
+        let alto = 0;
+        if ((client.mailbox as { exists?: number })?.exists === 0) return 0;
+        for await (const m of client.fetch("*", { uid: true })) alto = Math.max(alto, m.uid);
+        return alto;
       }),
       cercaDal: (data) => prova(async () => (await client.search({ since: data }, { uid: true })) || []),
       uidDopo: (uid) => prova(async () => (await client.search({ uid: `${uid + 1}:*` }, { uid: true })) || []),

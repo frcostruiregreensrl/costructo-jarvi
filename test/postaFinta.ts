@@ -6,11 +6,18 @@ import type { ApriImap, Casella, ConnessioneImap, MailInUscita, PostaInUscita, M
 export interface MailFinta {
   da?: string; daNome?: string; a?: string; oggetto?: string; testo?: string; html?: string;
   messageId?: string; data?: Date; intestazioni?: Record<string, string>; rispondiA?: string;
+  /** Righe messe IN CIMA (come quelle aggiunte dal fornitore di posta all'arrivo). */
+  righeIniziali?: string[];
+  /** Nome di un piccolo allegato (la mail diventa multipart). */
+  allegato?: string;
 }
 
 /** Una mail grezza (RFC 5322) semplice, in testo o HTML. */
 export function mailGrezza(m: MailFinta): Buffer {
+  const confine = "----confine-finto";
+  const corpo = m.html ?? m.testo ?? "Buongiorno, le scrivo per un saluto.";
   const righe = [
+    ...(m.righeIniziali ?? []),
     `From: ${m.daNome ? `"${m.daNome}" ` : ""}<${m.da ?? "mario.rossi@esempio.it"}>`,
     `To: ${m.a ?? "luigi@lavoro.example"}`,
     `Subject: ${m.oggetto ?? "Ciao"}`,
@@ -19,10 +26,14 @@ export function mailGrezza(m: MailFinta): Buffer {
     ...(m.rispondiA ? [`Reply-To: ${m.rispondiA}`] : []),
     ...Object.entries(m.intestazioni ?? {}).map(([k, v]) => `${k}: ${v}`),
     "MIME-Version: 1.0",
-    `Content-Type: ${m.html ? "text/html" : "text/plain"}; charset=utf-8`,
-    "Content-Transfer-Encoding: 8bit",
-    "",
-    m.html ?? m.testo ?? "Buongiorno, le scrivo per un saluto.",
+    ...(m.allegato
+      ? [
+        `Content-Type: multipart/mixed; boundary="${confine}"`, "", `--${confine}`,
+        `Content-Type: ${m.html ? "text/html" : "text/plain"}; charset=utf-8`, "Content-Transfer-Encoding: 8bit", "", corpo,
+        `--${confine}`, `Content-Type: application/pdf; name="${m.allegato}"`, `Content-Disposition: attachment; filename="${m.allegato}"`,
+        "Content-Transfer-Encoding: base64", "", Buffer.from("%PDF-1.4 finto").toString("base64"), `--${confine}--`,
+      ]
+      : [`Content-Type: ${m.html ? "text/html" : "text/plain"}; charset=utf-8`, "Content-Transfer-Encoding: 8bit", "", corpo]),
   ];
   return Buffer.from(righe.join("\r\n"));
 }
@@ -34,6 +45,8 @@ interface CasellaFinta {
   cartelle: Array<{ path: string; specialUse?: string }>;
   bozze: Array<{ cartella: string; sorgente: Buffer; segni: string[] }>;
   irraggiungibile?: boolean;
+  /** Server che non dice UIDNEXT. */
+  senzaUidNext?: boolean;
 }
 
 /** Server IMAP finto: registra ogni chiamata; non ha operazioni che cambiano i segni, spostano o cancellano. */
@@ -62,7 +75,8 @@ export class ImapFinto {
     const traccia = (nome: string) => this.chiamate.push(`${cas.utente}:${nome}`);
     let aperta = false;
     return {
-      apriInbox: async () => { traccia("apriInbox(sola lettura)"); aperta = true; return { uidValidity: c.uidValidity, uidNext: (c.messaggi.at(-1)?.uid ?? 0) + 1 }; },
+      apriInbox: async () => { traccia("apriInbox(sola lettura)"); aperta = true; return { uidValidity: c.uidValidity, uidNext: c.senzaUidNext ? 0 : (c.messaggi.at(-1)?.uid ?? 0) + 1 }; },
+      ultimoUid: async () => { traccia("ultimoUid"); return Math.max(0, ...c.messaggi.map((m) => m.uid)); },
       cercaDal: async (data) => { traccia("cercaDal"); if (!aperta) throw new Error("inbox non aperta"); return c.messaggi.filter((m) => m.data >= data).map((m) => m.uid); },
       uidDopo: async (uid) => {
         traccia("uidDopo");

@@ -173,6 +173,7 @@ function impostaVista(v) {
   document.querySelectorAll("[data-vista]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.vista === v)));
   $("#dialogo").textContent = "";
   disegnaAdesso();
+  if (!$("#pagina-posta").hidden) caricaPosta();
 }
 document.querySelectorAll("[data-vista]").forEach((b) => b.addEventListener("click", () => impostaVista(b.dataset.vista)));
 
@@ -624,7 +625,7 @@ const NOMI_PEC = { messaggio: "PEC", accettazione: "Ricevuta PEC di accettazione
 async function caricaPosta() {
   const contenitore = $("#postaGruppi");
   try {
-    const d = await api(`/api/posta/messaggi?giorni=${$("#postaGiorni").value}${$("#postaUrgenti").checked ? "&soloUrgenti=1" : ""}`);
+    const d = await api(`/api/posta/messaggi?vista=${stato.vista}&giorni=${$("#postaGiorni").value}${$("#postaUrgenti").checked ? "&soloUrgenti=1" : ""}`);
     disegnaPosta(d);
   } catch (e) {
     if (e instanceof NonAutenticato) return mostraAccesso();
@@ -638,6 +639,10 @@ function disegnaPosta(d) {
   if (d.senzaRiassuntoPerTetto) avvisi.push(`${d.senzaRiassuntoPerTetto} mail senza riassunto: tetto di spesa del mese raggiunto.`);
   for (const c of d.caselle) if (c.stato.esito === "errore") avvisi.push(`${c.nome}: ${c.stato.messaggio}`);
   $("#postaAvviso").textContent = avvisi.join(" · ");
+  if (!d.caselle.length && d.vista !== "tutto") {
+    contenitore.append(crea("p", "vuoto", d.vista === "privato" ? "Nessuna casella privata. Le caselle delle aziende sono nella scheda Lavoro." : "Nessuna casella di lavoro. Le caselle private sono nella scheda Privato."));
+    return;
+  }
   if (!d.caselle.length) {
     const p = crea("p", "vuoto", "Nessuna casella collegata. ");
     const a = crea("a", "", "Aggiungila dalle Impostazioni");
