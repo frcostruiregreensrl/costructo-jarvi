@@ -244,17 +244,17 @@ code { font-family: var(--mono); background: var(--sfondo-2); padding: 1px 5px; 
 .riga-filtri { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; margin: 8px 0; }
 .riga-filtri label:not(.spunta) { min-width: 0; flex: 1 1 160px; }
 .posta-gruppi { display: grid; gap: 18px; margin-top: 8px; }
-.gruppo-posta h2 { font-size: 18px; margin: 0 0 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; overflow-wrap: anywhere; }
-.gruppo-posta.lavoro h2 { color: var(--lavoro); }
-.gruppo-posta.privato h2 { color: var(--privato); }
+.gruppo-posta h2, .gruppo-wa h2 { font-size: 18px; margin: 0 0 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.gruppo-posta.lavoro h2, .gruppo-wa.lavoro h2 { color: var(--lavoro); }
+.gruppo-posta.privato h2, .gruppo-wa.privato h2 { color: var(--privato); }
 .conteggio-urgenti { font-size: 13px; color: #fff; background: var(--errore); border-radius: 999px; padding: 2px 10px; }
 :root[data-theme="dark"] .conteggio-urgenti { color: #2a0b08; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .conteggio-urgenti { color: #2a0b08; } }
 .lista-posta { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
-.posta-mail { background: var(--carta); border: 1px solid var(--bordo); border-left: 5px solid var(--bordo); border-radius: 12px; padding: 10px 12px; display: grid; gap: 4px; min-width: 0; }
-.gruppo-posta.lavoro .posta-mail { border-left-color: var(--lavoro); }
-.gruppo-posta.privato .posta-mail { border-left-color: var(--privato); }
-.posta-mail.urgente { border-color: var(--errore); border-left-color: var(--errore); background: color-mix(in srgb, var(--errore) 7%, var(--carta)); }
+.posta-mail, .wa-chat { background: var(--carta); border: 1px solid var(--bordo); border-left: 5px solid var(--bordo); border-radius: 12px; padding: 10px 12px; display: grid; gap: 4px; min-width: 0; }
+.gruppo-posta.lavoro .posta-mail, .gruppo-wa.lavoro .wa-chat { border-left-color: var(--lavoro); }
+.gruppo-posta.privato .posta-mail, .gruppo-wa.privato .wa-chat { border-left-color: var(--privato); }
+.posta-mail.urgente, .wa-chat.urgente { border-color: var(--errore); border-left-color: var(--errore); background: color-mix(in srgb, var(--errore) 7%, var(--carta)); }
 .posta-mail.automatica { opacity: .85; }
 .posta-testa { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
 .posta-oggetto { overflow-wrap: anywhere; }
@@ -266,7 +266,7 @@ code { font-family: var(--mono); background: var(--sfondo-2); padding: 1px 5px; 
 .posta-meta { color: var(--testo-2); font-size: 13px; overflow-wrap: anywhere; margin: 0; }
 .posta-riassunto, .posta-motivo { margin: 0; overflow-wrap: anywhere; }
 .posta-motivo { color: var(--errore); font-size: 14px; font-weight: 600; }
-.posta-mail > button { justify-self: start; margin-top: 4px; }
+.posta-mail > button, .wa-chat > button { justify-self: start; margin-top: 4px; }
 .posta-dettaglio { display: grid; gap: 8px; border-top: 1px solid var(--bordo); padding-top: 10px; margin-top: 4px; min-width: 0; }
 .estratto { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--sfondo); border: 1px solid var(--bordo); border-radius: 10px; padding: 10px 12px; max-height: 320px; overflow: auto; font-size: 15px; }
 .allegati { margin: 0; padding-left: 20px; overflow-wrap: anywhere; }
@@ -292,6 +292,27 @@ code { font-family: var(--mono); background: var(--sfondo-2); padding: 1px 5px; 
 .lista-calendari label.spunta { overflow-wrap: anywhere; min-width: 0; }
 .pallino { width: 12px; height: 12px; border-radius: 50%; background: var(--bordo); flex: none; }
 @media (max-width: 480px) { .lista-calendari li { grid-template-columns: 1fr; } }
+
+/* WhatsApp (Fase 3) */
+.wa-domande { display: grid; gap: 10px; margin: 8px 0 14px; }
+.wa-domanda .azioni { display: flex; flex-wrap: wrap; gap: 8px; }
+.gruppo-wa.da-assegnare h2 { color: var(--ambra); }
+.gruppo-wa.da-assegnare .wa-chat { border-left-color: var(--ambra); border-left-style: dashed; }
+.wa-chat.attesa:not(.urgente) { border-color: var(--ambra); }
+.conteggio-attesa { font-size: 13px; color: var(--testo); background: var(--ambra-tenue); border: 1px solid var(--ambra); border-radius: 999px; padding: 1px 10px; }
+.etichetta.attesa { border-color: var(--ambra); color: var(--ambra); }
+.wa-messaggi { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: 420px; overflow: auto; }
+.wa-msg { max-width: 88%; border: 1px solid var(--bordo); border-radius: 12px; padding: 6px 10px; background: var(--sfondo); min-width: 0; }
+.wa-msg.in { justify-self: start; }
+.wa-msg.out { justify-self: end; background: color-mix(in srgb, var(--petrolio) 10%, var(--carta)); border-color: color-mix(in srgb, var(--petrolio) 35%, var(--bordo)); }
+.wa-msg.urgente { border-color: var(--errore); }
+.wa-msg .posta-meta { display: block; }
+.wa-testo, .wa-anteprima { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wa-anteprima { background: var(--carta); border: 1px solid var(--bordo); border-radius: 10px; padding: 8px 10px; font-weight: 400; }
+.wa-azienda { align-items: end; }
+.wa-azienda label { display: grid; gap: 4px; min-width: 0; flex: 1 1 200px; }
+.testo-lungo { overflow-wrap: anywhere; word-break: break-all; }
+#waCampiMeta[hidden], #waCampiBsp[hidden] { display: none !important; }
 
 @media (min-width: 900px) {
   #sfera { width: 220px; height: 220px; }

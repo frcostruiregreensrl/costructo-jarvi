@@ -21,6 +21,9 @@ import { dataIso } from "../src/tempo.js";
 import { aggiungiCasella } from "../src/posta/caselle.js";
 import type { ServiziApp } from "../src/app.js";
 import { ImapFinto, uscitaFinta } from "../test/postaFinta.js";
+import { elaboraWebhook } from "../src/whatsapp/elabora.js";
+import { creaServizioWhatsapp } from "../src/whatsapp/servizio.js";
+import { ricevuto, eco, PHONE_NUMBER_ID } from "../test/metaFinto.js";
 
 const PASSWORD = "password-finta-di-prova";
 const SEGRETO = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
@@ -78,6 +81,13 @@ salvaImpostazioni(db, { tettoMensileUsd: 5, comeChiamarmi: "Luigi" });
 const cervello = creaCervelloFinto((r) => {
   const ultimo = r.messaggi[r.messaggi.length - 1];
   // Posta: riassunti (filtro) e bozze, sempre finti.
+  // WhatsApp: classificazione finta (un oggetto per chat).
+  if (!r.strumenti.length && /filtro dei messaggi WhatsApp/.test(r.sistema) && ultimo.ruolo === "utente") {
+    const righe = ultimo.testo.split("\n");
+    const d = JSON.parse(righe[righe.findIndex((x) => x.startsWith("<dati_non_attendibili")) + 1]) as { nuovi: Array<{ testo: string }> };
+    const t = d.nuovi.map((x) => x.testo).join(" ");
+    return { testo: JSON.stringify({ riassunto: `Riassunto finto: ${t.slice(0, 60)}`, urgente: /urgente|ferm/i.test(t), motivo: /urgente|ferm/i.test(t) ? "cantiere fermo (finto)" : "", tocca: /fattura|paga/i.test(t), azienda: "" }) };
+  }
   if (!r.strumenti.length && /BOZZA/.test(r.sistema)) return { testo: "Buongiorno,\n\nla ringrazio per il messaggio. Le confermo che passeremo in cantiere [da completare].\n\nCordiali saluti" };
   if (!r.strumenti.length && ultimo.ruolo === "utente") {
     const righe = ultimo.testo.split("\n");
@@ -110,6 +120,19 @@ imap.arriva("lavoro@prova.example", { oggetto: "Novità del mese (finta)", da: "
 imap.arriva("pec@prova.example", { oggetto: "Comunicazione di avvio lavori (finta)", daNome: "Comune di Prova", da: "protocollo@prova.example", data: new Date(ora - 26 * 3600_000), testo: "Si comunica... (testo finto)" });
 imap.arriva("casa@prova.example", { oggetto: "Cena di sabato (finta)", daNome: "Anna", da: "anna@prova.example", data: new Date(ora - 2 * 3600_000), testo: "Ci vediamo sabato alle 20? (testo finto)" });
 await servizi.posta.controllaOra();
+
+// WhatsApp finto (Fase 3): NON collegato (si vede l'avviso «parte 2»), ma con qualche chat finta già arrivata.
+const adesso = Date.now();
+const chat = [
+  { da: "393330000101", nome: "Capocantiere Prova (finto)", testo: "Urgente: la betoniera è ferma in cantiere Villa Rosa (finto)", spazio: prima.id },
+  { da: "393330000102", nome: "Fornitore Prova (finto)", testo: "Buongiorno, quando mi paga la fattura di ottobre? (finto)", spazio: seconda.id },
+  { da: "393330000103", nome: "Anna (finta)", testo: "Ci vediamo sabato alle 20? (finto)", spazio: "privato" },
+  { da: "393330000104", nome: "Numero nuovo (finto)", testo: "Buongiorno, sono il geometra del condominio (finto)", spazio: "" },
+];
+for (const c of chat) elaboraWebhook(db, ricevuto({ da: c.da, nome: c.nome, testo: c.testo, quando: adesso - 10 * 60_000 }), PHONE_NUMBER_ID, adesso - 10 * 60_000);
+elaboraWebhook(db, eco({ a: "393330000103", testo: "Sì, perfetto! (finto)", quando: adesso - 5 * 60_000 }), PHONE_NUMBER_ID, adesso - 5 * 60_000);
+for (const c of chat) if (c.spazio) db.prepare("UPDATE wa_contatti SET spazio = ?, fonte_spazio = 'luigi' WHERE wa_id = ?").run(c.spazio, c.da);
+await creaServizioWhatsapp({ ...servizi.whatsapp.dip, ora: () => Date.now() }).giroOra();
 const server = app.listen(Number(process.env.PORTA_PROVA) || 0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
 const porta = (server.address() as AddressInfo).port;

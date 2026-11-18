@@ -145,7 +145,7 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#menu").hidden) { $("#menu").hidden = true; $("#apriMenu").focus(); } });
 addEventListener("hashchange", instrada);
 
-const PAGINE = ["home", "posta", "memoria", "registro", "spesa", "impostazioni"];
+const PAGINE = ["home", "posta", "whatsapp", "memoria", "registro", "spesa", "impostazioni"];
 function instrada() {
   if ($("#app").hidden) return;
   let p = location.hash.replace("#", "") || "home";
@@ -158,6 +158,7 @@ function instrada() {
   a11yCambio = true;
   $("#menu").hidden = true;
   if (p === "posta") caricaPosta();
+  if (p === "whatsapp") caricaWhatsapp();
   if (p === "memoria") caricaMemorie();
   if (p === "registro") caricaRegistro(true);
   if (p === "spesa") caricaSpesa();
@@ -174,6 +175,7 @@ function impostaVista(v) {
   $("#dialogo").textContent = "";
   disegnaAdesso();
   if (!$("#pagina-posta").hidden) caricaPosta();
+  if (!$("#pagina-whatsapp").hidden) caricaWhatsapp();
 }
 document.querySelectorAll("[data-vista]").forEach((b) => b.addEventListener("click", () => impostaVista(b.dataset.vista)));
 
@@ -370,6 +372,10 @@ const NOMI_AZIONI = {
   "posta.leggi": "Lettura della posta", "posta.classifica": "Riassunti della posta", "posta.bozza": "Bozza di risposta", "posta.caselle": "Caselle email cambiate",
   "posta.conferma_automatica": "Conferma di ricezione automatica", "posta.pulizia": "Pulizia posta (30 giorni)", "notifica.posta": "Notifica mail urgente",
   "calendario_aziende.leggi": "Lettura dei calendari di lavoro",
+  "whatsapp.leggi": "Lettura di WhatsApp", "whatsapp.ricevuti": "Messaggi WhatsApp arrivati", "whatsapp.classifica": "Riassunti di WhatsApp",
+  "whatsapp.risposta": "Risposta WhatsApp preparata", "whatsapp.invio": "Messaggio WhatsApp mandato", "whatsapp.assegna": "Azienda di un contatto WhatsApp",
+  "whatsapp.azienda": "Azienda di un contatto WhatsApp", "whatsapp.conferma_automatica": "Conferma automatica WhatsApp", "whatsapp.webhook": "Webhook WhatsApp",
+  "whatsapp.storico": "Storico WhatsApp", "whatsapp.pulizia": "Pulizia WhatsApp (30 giorni)", "whatsapp.account": "Account WhatsApp", "notifica.whatsapp": "Notifica WhatsApp",
 };
 const NOMI_ESITI = { fatto: "Fatto", negato: "Bloccato", errore: "Errore", richiesta_conferma: "In attesa di conferma" };
 const NOMI_ORIGINI = { luigi: "da te", jarvis: "da Jarvis", sistema: "dal sistema" };
@@ -441,6 +447,7 @@ async function caricaImpostazioni() {
     aggiornaStatoNotifiche();
     caricaCaselle();
     caricaApple();
+    caricaWaImpostazioni();
   } catch (e) { if (e instanceof NonAutenticato) mostraAccesso(); }
 }
 function riempiVoci(scelta) {
@@ -783,6 +790,326 @@ $("#postaAggiorna").addEventListener("click", async () => {
     if (e instanceof NonAutenticato) return mostraAccesso();
     st.className = "esito male"; st.textContent = e.message;
   } finally { b.disabled = false; }
+});
+
+// ------------------------------------------------------------------ WhatsApp (Fase 3, parte 1: senza collegamento reale)
+// Chat divise per azienda, privato e «Da assegnare»; urgenti e senza risposta evidenziate; domande «Di quale azienda è…?»
+// con i pulsanti. «Prepara risposta» → testo modificabile → «Invia» → conferma esplicita. Mai «spunte blu».
+const NOMI_ALLEGATI = { image: "foto", document: "documento", audio: "audio", video: "video", sticker: "adesivo" };
+
+async function caricaWhatsapp() {
+  try {
+    disegnaWhatsapp(await api(`/api/whatsapp/chat?vista=${stato.vista}&giorni=${$("#waGiorni").value}${$("#waUrgenti").checked ? "&soloUrgenti=1" : ""}`));
+  } catch (e) {
+    if (e instanceof NonAutenticato) return mostraAccesso();
+    $("#waGruppi").replaceChildren(crea("p", "vuoto", "WhatsApp non è disponibile in questo momento."));
+  }
+}
+function disegnaWhatsapp(d) {
+  $("#waNonCollegato").hidden = !!d.collegamento?.webhookAttivo;
+  const domande = $("#waDomande");
+  domande.replaceChildren();
+  for (const q of d.domande) domande.append(schedaDomanda(q, d.aziende));
+  const contenitore = $("#waGruppi");
+  contenitore.replaceChildren();
+  if (!d.chat.length) {
+    contenitore.append(crea("p", "vuoto", d.collegamento?.webhookAttivo ? "Nessuna chat in questo periodo." : "Ancora nessun messaggio: WhatsApp si collega nella parte 2."));
+    return;
+  }
+  // Gruppi: prima le aziende (per nome), poi il privato, poi i contatti da assegnare.
+  const ordine = (s) => (s === "" ? 2 : s === "privato" ? 1 : 0);
+  const gruppi = new Map();
+  for (const g of d.gruppi) gruppi.set(g.spazio, { spazio: g.spazio, nome: g.nome, chat: [] });
+  for (const c of d.chat) {
+    if (!gruppi.has(c.contatto.spazio)) gruppi.set(c.contatto.spazio, { spazio: c.contatto.spazio, nome: c.contatto.nomeSpazio, chat: [] });
+    gruppi.get(c.contatto.spazio).chat.push(c);
+  }
+  const ordinati = [...gruppi.values()].filter((g) => g.chat.length).sort((a, b) => (ordine(a.spazio) - ordine(b.spazio)) || a.nome.localeCompare(b.nome, "it"));
+  for (const g of ordinati) {
+    const tipo = g.spazio === "privato" ? "privato" : g.spazio === "" ? "da-assegnare" : "lavoro";
+    const sezione = crea("section", `gruppo-wa ${tipo}`);
+    const titolo = crea("h2", "", g.nome);
+    const urgenti = g.chat.filter((c) => c.urgenti).length, senza = g.chat.filter((c) => c.senzaRisposta && !c.soloStorico).length;
+    if (urgenti) titolo.append(crea("span", "conteggio-urgenti", `${urgenti} ${urgenti === 1 ? "urgente" : "urgenti"}`));
+    if (senza) titolo.append(crea("span", "conteggio-attesa", `${senza} senza risposta`));
+    sezione.append(titolo);
+    const lista = crea("ul", "lista-posta lista-wa");
+    for (const c of g.chat) lista.append(rigaChat(c, d.aziende));
+    sezione.append(lista);
+    contenitore.append(sezione);
+  }
+}
+function schedaDomanda(q, aziende) {
+  const box = crea("section", "conferma wa-domanda");
+  box.setAttribute("aria-label", q.domanda);
+  box.append(crea("p", "", q.domanda));
+  if (q.propostaNome) box.append(crea("small", "posta-meta", `Dalla chat, Jarvis pensa: ${q.propostaNome}. Decidi tu.`));
+  const azioni = crea("div", "azioni");
+  const scegli = async (spazio) => {
+    azioni.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    try {
+      const r = await api(`/api/whatsapp/domande/${encodeURIComponent(q.id)}`, { metodo: "POST", corpo: { spazio } });
+      $("#waStato").className = "esito"; $("#waStato").textContent = r.messaggio;
+      await caricaWhatsapp();
+    } catch (e) {
+      if (e instanceof NonAutenticato) return mostraAccesso();
+      box.append(crea("p", "esito male", e.message));
+      azioni.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    }
+  };
+  for (const a of [...aziende, { id: "privato", nome: "Privato" }]) {
+    const b = crea("button", a.id === q.proposta ? "primario" : "secondario", a.nome);
+    b.type = "button";
+    b.addEventListener("click", () => scegli(a.id));
+    azioni.append(b);
+  }
+  box.append(azioni);
+  return box;
+}
+function rigaChat(c, aziende) {
+  const li = crea("li", `wa-chat${c.urgenti ? " urgente" : ""}${c.senzaRisposta && !c.soloStorico ? " attesa" : ""}`);
+  const testa = crea("div", "posta-testa");
+  testa.append(crea("b", "posta-oggetto", c.contatto.nome));
+  const etichette = crea("span", "etichette");
+  if (c.urgenti) etichette.append(crea("span", "etichetta urgente", "Urgente"));
+  if (c.senzaRisposta && !c.soloStorico) etichette.append(crea("span", "etichetta attesa", "Senza risposta"));
+  if (c.ultimo.tocca) etichette.append(crea("span", "etichetta soldi", "Soldi o impegni"));
+  if (c.proposte) etichette.append(crea("span", "etichetta", "Risposta proposta"));
+  if (c.contatto.gruppo) etichette.append(crea("span", "etichetta", "Gruppo"));
+  if (c.soloStorico) etichette.append(crea("span", "etichetta", "Chat passata"));
+  testa.append(etichette);
+  const chi = c.ultimo.direzione === "in" ? "" : c.ultimo.automatico ? "Conferma automatica: " : "Tu: ";
+  const meta = crea("small", "posta-meta", [c.contatto.numero, quando(c.ultimo.quando), c.contatto.trovatoInCostructo ? "trovato in Costructo" : ""].filter(Boolean).join(" · "));
+  const testo = c.ultimo.riassunto || (c.ultimo.stato === "tetto" ? "Senza riassunto (tetto di spesa raggiunto)." : `${chi}${c.ultimo.testo}`);
+  li.append(testa, meta, crea("p", "posta-riassunto", testo.length > 220 ? `${testo.slice(0, 220)}…` : testo));
+  if (c.ultimo.urgente && c.ultimo.motivo) li.append(crea("p", "posta-motivo", `Perché è urgente: ${c.ultimo.motivo}`));
+  const apri = crea("button", "secondario", "Apri");
+  apri.type = "button";
+  apri.setAttribute("aria-expanded", "false");
+  apri.setAttribute("aria-label", `Apri la chat con ${c.contatto.nome}`);
+  const dettaglio = crea("div", "posta-dettaglio");
+  dettaglio.hidden = true;
+  dettaglio.id = `chat-${c.contatto.id}`;
+  apri.setAttribute("aria-controls", dettaglio.id);
+  apri.addEventListener("click", async () => {
+    const aperto = apri.getAttribute("aria-expanded") === "true";
+    apri.setAttribute("aria-expanded", String(!aperto));
+    apri.textContent = aperto ? "Apri" : "Chiudi";
+    dettaglio.hidden = aperto;
+    if (!aperto) await riempiChat(c.contatto.id, dettaglio, aziende);
+  });
+  li.append(apri, dettaglio);
+  return li;
+}
+async function riempiChat(id, box, aziende) {
+  box.replaceChildren(crea("p", "vuoto", "Carico…"));
+  let d;
+  try { d = await api(`/api/whatsapp/chat/${encodeURIComponent(id)}`); } catch (e) {
+    if (e instanceof NonAutenticato) return mostraAccesso();
+    box.replaceChildren(crea("p", "vuoto", e.message));
+    return;
+  }
+  box.replaceChildren();
+  box.append(crea("p", "posta-meta", `${d.contatto.nomeSpazio}${d.contatto.sceltoDaLuigi ? " (scelto da te)" : d.contatto.trovatoInCostructo ? " (numero trovato in Costructo)" : ""}`));
+  const lista = crea("ol", "wa-messaggi");
+  lista.setAttribute("aria-label", `Ultimi messaggi con ${d.contatto.nome}`);
+  for (const m of d.messaggi) {
+    const li = crea("li", `wa-msg ${m.direzione === "in" ? "in" : "out"}${m.urgente ? " urgente" : ""}`);
+    const chi = m.direzione === "in" ? d.contatto.nome : m.automatico ? "Jarvis (conferma automatica)" : m.direzione === "out" ? "Jarvis, per te" : "Tu dal telefono";
+    const stato = m.statoInvio ? ` · ${{ sent: "inviato", delivered: "consegnato", read: "letto", failed: "non consegnato" }[m.statoInvio] || m.statoInvio}` : "";
+    li.append(crea("small", "posta-meta", `${chi} · ${quando(m.quando)}${m.storico ? " · chat passata" : ""}${stato}`));
+    if (m.testo) li.append(crea("p", "wa-testo", m.testo));
+    if (m.allegato) li.append(crea("p", "posta-meta", `Allegato: ${NOMI_ALLEGATI[m.allegato.tipo] || m.allegato.tipo}${m.allegato.nomeFile ? ` «${m.allegato.nomeFile}»` : ""} (aprilo dal telefono)`));
+    if (m.erroreInvio) li.append(crea("p", "esito male", m.erroreInvio));
+    lista.append(li);
+  }
+  box.append(lista);
+  // Risposte proposte o in bozza
+  for (const r of d.risposte) box.append(schedaRisposta(d, r, () => riempiChat(id, box, aziende)));
+  // Cambiare l'azienda del contatto
+  const riga = crea("div", "azioni-modulo wa-azienda");
+  const etichetta = crea("label", "", "Appartiene a ");
+  const scelta = crea("select");
+  for (const a of [...aziende, { id: "privato", nome: "Privato" }]) {
+    const o = crea("option", "", a.nome); o.value = a.id; if (a.id === d.contatto.spazio) o.selected = true; scelta.append(o);
+  }
+  if (!d.contatto.spazio) { const o = crea("option", "", "Da assegnare"); o.value = ""; o.selected = true; o.disabled = true; scelta.prepend(o); }
+  etichetta.append(scelta);
+  const salva = crea("button", "secondario", "Salva l'azienda");
+  salva.type = "button";
+  const esitoAz = crea("p", "esito"); esitoAz.setAttribute("role", "status");
+  salva.addEventListener("click", async () => {
+    if (!scelta.value) return;
+    try {
+      const r = await api(`/api/whatsapp/chat/${encodeURIComponent(id)}/azienda`, { metodo: "PUT", corpo: { spazio: scelta.value } });
+      esitoAz.className = "esito"; esitoAz.textContent = r.messaggio;
+    } catch (e) { esitoAz.className = "esito male"; esitoAz.textContent = e.message; }
+  });
+  riga.append(etichetta, salva);
+  box.append(riga, esitoAz);
+  if (d.contatto.gruppo) { box.append(crea("p", "aiuto", "Nei gruppi Jarvis non scrive: rispondi dal telefono.")); return; }
+  if (!d.dentroFinestra) {
+    box.append(crea("p", "avviso-forte", "Sono passate più di 24 ore dall'ultimo messaggio di questo contatto: WhatsApp permette di scrivere solo con un «modello» approvato da Meta, che arriverà nella parte 2. Se serve, rispondi dal telefono."));
+    return;
+  }
+  const prepara = crea("button", "primario", "Prepara risposta");
+  prepara.type = "button";
+  const zona = crea("div", "zona-bozza");
+  prepara.addEventListener("click", () => apriRispostaWa(d, zona, prepara, () => riempiChat(id, box, aziende)));
+  box.append(prepara, zona);
+}
+/** Conferma esplicita dentro la pagina: il messaggio parte solo dopo «Sì, manda». */
+function chiediConfermaInvio(d, testo, zona, manda) {
+  zona.querySelector(".wa-conferma")?.remove();
+  const box = crea("div", "conferma wa-conferma");
+  box.setAttribute("role", "group");
+  box.append(crea("p", "", `Mando questo messaggio su WhatsApp a ${d.contatto.nome} (${d.contatto.nomeSpazio})? Parte subito e non si può ritirare da Jarvis.`));
+  box.append(crea("p", "wa-anteprima", testo));
+  const azioni = crea("div", "azioni");
+  const si = crea("button", "primario", "Sì, manda");
+  const no = crea("button", "secondario", "Annulla");
+  si.type = "button"; no.type = "button";
+  no.addEventListener("click", () => box.remove());
+  si.addEventListener("click", async () => { si.disabled = true; no.disabled = true; await manda(); box.remove(); });
+  azioni.append(si, no);
+  box.append(azioni);
+  zona.append(box);
+  si.focus();
+}
+function schedaRisposta(d, r, ricarica) {
+  const box = crea("div", "zona-bozza wa-risposta");
+  box.append(crea("p", "sottotitolo", r.tipo === "richiesta_documento" ? "Jarvis propone di chiedere la fattura o il documento (si parla di un pagamento senza documento):" : r.stato === "errore" ? "Risposta non partita:" : "Risposta preparata, non ancora mandata:"));
+  const idArea = `risposta-${r.id}`;
+  const etichetta = crea("label", "nascosto", "Testo della risposta"); etichetta.htmlFor = idArea;
+  const area = crea("textarea", "testo-bozza"); area.id = idArea; area.value = r.testo; area.rows = 4; area.maxLength = 4000;
+  const esito = crea("p", r.stato === "errore" ? "esito male" : "esito"); esito.setAttribute("role", "status");
+  if (r.esito && r.stato !== "inviata") esito.textContent = r.esito;
+  const invia = crea("button", "primario", "Invia"); invia.type = "button";
+  const scarta = crea("button", "secondario", "Scarta"); scarta.type = "button";
+  invia.addEventListener("click", () => chiediConfermaInvio(d, area.value, box, async () => {
+    try {
+      const e = await api(`/api/whatsapp/risposte/${encodeURIComponent(r.id)}/invia`, { metodo: "POST", corpo: { conferma: true, testo: area.value } });
+      esito.className = e.inviata ? "esito" : "esito male"; esito.textContent = e.messaggio;
+      if (e.inviata) setTimeout(ricarica, 1200);
+    } catch (err) { if (err instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = err.message; }
+  }));
+  scarta.addEventListener("click", async () => { try { await api(`/api/whatsapp/risposte/${encodeURIComponent(r.id)}`, { metodo: "DELETE" }); ricarica(); } catch (err) { esito.textContent = err.message; } });
+  const azioni = crea("div", "azioni-modulo"); azioni.append(invia, scarta);
+  box.append(etichetta, area, azioni, esito);
+  return box;
+}
+async function apriRispostaWa(d, zona, pulsante, ricarica) {
+  pulsante.disabled = true;
+  zona.replaceChildren(crea("p", "vuoto", "Jarvis prepara il testo…"));
+  let testo = "";
+  try { testo = (await api(`/api/whatsapp/chat/${encodeURIComponent(d.contatto.id)}/proponi`, { metodo: "POST", corpo: {} })).testo; } catch (e) {
+    if (e instanceof NonAutenticato) return mostraAccesso();
+    zona.replaceChildren(crea("p", "esito male", e.message));
+  }
+  const id = `nuova-risposta-${d.contatto.id}`;
+  const etichetta = crea("label", "", `Risposta a ${d.contatto.nome} (${d.contatto.nomeSpazio})`); etichetta.htmlFor = id;
+  const area = crea("textarea", "testo-bozza"); area.id = id; area.value = testo; area.rows = 5; area.maxLength = 4000;
+  const nota = crea("p", "aiuto", "Correggi il testo se serve. Il messaggio parte solo quando premi «Invia» e confermi. Dove Jarvis non sa (soldi, date, impegni) ha scritto [da completare].");
+  const invia = crea("button", "primario", "Invia"); invia.type = "button";
+  const annulla = crea("button", "secondario", "Annulla"); annulla.type = "button";
+  const esito = crea("p", "esito"); esito.setAttribute("role", "status");
+  annulla.addEventListener("click", () => { zona.replaceChildren(); pulsante.disabled = false; pulsante.focus(); });
+  invia.addEventListener("click", () => {
+    if (!area.value.trim()) { esito.className = "esito male"; esito.textContent = "Scrivi il testo della risposta."; return; }
+    if (/\[da completare\]/i.test(area.value)) { esito.className = "esito male"; esito.textContent = "C'è ancora [da completare]: completa il testo prima di mandarlo."; return; }
+    chiediConfermaInvio(d, area.value, zona, async () => {
+      try {
+        const r = await api(`/api/whatsapp/chat/${encodeURIComponent(d.contatto.id)}/risposte`, { metodo: "POST", corpo: { testo: area.value } });
+        const e = await api(`/api/whatsapp/risposte/${encodeURIComponent(r.id)}/invia`, { metodo: "POST", corpo: { conferma: true } });
+        esito.className = e.inviata ? "esito" : "esito male"; esito.textContent = e.messaggio;
+        if (e.inviata) setTimeout(ricarica, 1200);
+      } catch (err) { if (err instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = err.message; }
+    });
+  });
+  const azioni = crea("div", "azioni-modulo"); azioni.append(invia, annulla);
+  if (zona.firstChild?.classList?.contains("vuoto")) zona.replaceChildren();
+  zona.append(etichetta, area, nota, azioni, esito);
+  area.focus();
+}
+$("#waGiorni").addEventListener("change", caricaWhatsapp);
+$("#waUrgenti").addEventListener("change", caricaWhatsapp);
+$("#waAggiorna").addEventListener("click", async () => {
+  const b = $("#waAggiorna"), st = $("#waStato");
+  b.disabled = true;
+  try {
+    const r = await api("/api/whatsapp/aggiorna", { metodo: "POST", corpo: {} });
+    st.className = "esito"; st.textContent = r.messaggio;
+    await caricaWhatsapp();
+  } catch (e) { if (e instanceof NonAutenticato) return mostraAccesso(); st.className = "esito male"; st.textContent = e.message; } finally { b.disabled = false; }
+});
+
+// ------------------------------------------------------------------ Impostazioni → WhatsApp (i segreti non tornano mai: solo «impostato sì/no»)
+async function caricaWaImpostazioni() {
+  try { disegnaWaImpostazioni(await api("/api/whatsapp/collegamento")); } catch (e) { if (e instanceof NonAutenticato) mostraAccesso(); }
+}
+function mostraCampiWa(provider) {
+  $("#waCampiMeta").hidden = provider !== "meta";
+  $("#waCampiBsp").hidden = provider !== "bsp";
+  $("#waEtichettaToken").textContent = provider === "meta" ? "Token di accesso di Meta" : "Chiave API del fornitore";
+}
+function disegnaWaImpostazioni(d) {
+  $("#waStatoColl").textContent = d.stato;
+  $("#waProvider").value = d.provider;
+  mostraCampiWa(d.provider);
+  $("#waVersione").value = d.versione || "";
+  $("#waBase").value = d.baseUrl || "";
+  $("#waIntestazione").value = d.intestazione || "";
+  $("#waPhoneId").value = d.phoneNumberId || "";
+  for (const id of ["#waToken", "#waSegreto", "#waVerifica"]) { $(id).value = ""; $(id).type = "password"; }
+  $("#waTokenStato").textContent = `Impostato: ${d.tokenImpostato ? "sì" : "no"}.`;
+  $("#waSegretoStato").textContent = `Impostato: ${d.appSecretImpostato ? "sì" : "no"}. Serve a controllare che ogni messaggio arrivi davvero da Meta.`;
+  $("#waVerificaStato").textContent = `Impostata: ${d.verifyTokenImpostato ? "sì" : "no"}.`;
+  $("#waUrl").textContent = d.urlWebhook;
+  $("#waConferme").checked = !!d.confermeAutomatiche;
+  $("#waNascondi").checked = !!d.nascondiContenuto;
+}
+$("#waProvider").addEventListener("change", (e) => mostraCampiWa(e.target.value));
+$("#waGenera").addEventListener("click", () => {
+  const b = new Uint8Array(24);
+  crypto.getRandomValues(b);
+  $("#waVerifica").type = "text";
+  $("#waVerifica").value = btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  $("#waVerificaStato").textContent = "Copiala ora nel pannello di Meta (Verify Token), poi premi Salva: dopo non la mostro più.";
+});
+$("#formWhatsapp").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const esito = $("#esitoWhatsapp");
+  const corpo = { provider: $("#waProvider").value, phoneNumberId: $("#waPhoneId").value.trim() };
+  if (corpo.provider === "meta") corpo.versione = $("#waVersione").value.trim();
+  else { corpo.baseUrl = $("#waBase").value.trim(); corpo.intestazione = $("#waIntestazione").value.trim(); }
+  if ($("#waToken").value.trim()) corpo.token = $("#waToken").value.trim();
+  if ($("#waSegreto").value.trim()) corpo.appSecret = $("#waSegreto").value.trim();
+  if ($("#waVerifica").value.trim()) corpo.verifyToken = $("#waVerifica").value.trim();
+  try {
+    disegnaWaImpostazioni(await api("/api/whatsapp/collegamento", { metodo: "PUT", corpo }));
+    esito.className = "esito"; esito.textContent = "Salvato. Il collegamento vero arriva nella parte 2.";
+  } catch (err) { if (err instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = err.message; }
+});
+$("#waScollega").addEventListener("click", async () => {
+  if (!confirm("Scollegare WhatsApp? Jarvis dimentica token, segreto e parola di verifica (le chat già salvate restano fino a 30 giorni).")) return;
+  try { disegnaWaImpostazioni(await api("/api/whatsapp/collegamento", { metodo: "DELETE" })); $("#esitoWhatsapp").className = "esito"; $("#esitoWhatsapp").textContent = "WhatsApp scollegato."; }
+  catch (err) { $("#esitoWhatsapp").className = "esito male"; $("#esitoWhatsapp").textContent = err.message; }
+});
+$("#waConferme").addEventListener("change", async (e) => {
+  const attiva = e.target.checked;
+  const esito = $("#esitoWaOpzioni");
+  if (attiva && !confirm("Attivare le conferme automatiche su WhatsApp? Partono solo ai contatti delle aziende, mai nei gruppi e mai quando si parla di soldi o impegni.")) { e.target.checked = false; return; }
+  try {
+    await api("/api/impostazioni", { metodo: "PUT", corpo: { whatsappConfermeAutomatiche: attiva } });
+    esito.className = "esito"; esito.textContent = attiva ? "Conferme automatiche WhatsApp attive." : "Conferme automatiche WhatsApp spente.";
+  } catch (err) { e.target.checked = !attiva; esito.className = "esito male"; esito.textContent = err.message; }
+});
+$("#waNascondi").addEventListener("change", async (e) => {
+  const esito = $("#esitoWaOpzioni");
+  try {
+    await api("/api/impostazioni", { metodo: "PUT", corpo: { whatsappNascondiContenuto: e.target.checked } });
+    esito.className = "esito"; esito.textContent = e.target.checked ? "Le notifiche non mostreranno il nome del contatto." : "Le notifiche mostreranno il nome del contatto (mai il testo).";
+  } catch (err) { e.target.checked = !e.target.checked; esito.className = "esito male"; esito.textContent = err.message; }
 });
 
 // ------------------------------------------------------------------ Impostazioni → Caselle email

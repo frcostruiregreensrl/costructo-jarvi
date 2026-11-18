@@ -1,6 +1,6 @@
 // Service worker di Jarvis: rende l'app installabile, tiene in cache solo i file dell'interfaccia
 // (MAI le risposte delle API, che contengono dati personali) e mostra le notifiche del briefing.
-const VERSIONE = "jarvis-v3";
+const VERSIONE = "jarvis-v4";
 const FILE = ["/", "/index.html", "/stile.css", "/app.js", "/api.js", "/voce.js", "/classic/scena2d.js", "/manifest.webmanifest", "/icone/icona.svg"];
 
 self.addEventListener("install", (e) => {

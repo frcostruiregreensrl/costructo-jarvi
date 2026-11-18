@@ -75,6 +75,7 @@
     <nav id="menu" class="menu" hidden aria-label="Sezioni">
       <a href="#home">Home</a>
       <a href="#posta">Posta</a>
+      <a href="#whatsapp">WhatsApp</a>
       <a href="#memoria">Cosa sa di me</a>
       <a href="#registro">Cosa ha fatto</a>
       <a href="#spesa">Spesa del mese</a>
@@ -133,6 +134,32 @@
         <p id="postaStato" class="esito" role="status" aria-live="polite"></p>
         <p id="postaAvviso" class="avvisi"></p>
         <div id="postaGruppi" class="posta-gruppi" aria-live="polite"></div>
+      </section>
+
+      <!-- WHATSAPP (Fase 3) -->
+      <section id="pagina-whatsapp" class="pagina" hidden aria-labelledby="titoloWhatsapp">
+        <h1 id="titoloWhatsapp">WhatsApp</h1>
+        <p class="sotto">Le chat del tuo numero WhatsApp, divise per azienda e privato. Jarvis legge, riassume e segnala le urgenze. Una risposta parte solo quando la confermi tu, e solo entro 24 ore dall'ultimo messaggio del contatto. Jarvis non manda mai le «spunte blu»: i messaggi li leggi tu sul telefono.</p>
+        <p id="waNonCollegato" class="avviso-forte" hidden>WhatsApp non è ancora collegato: il collegamento vero arriva nella <b>parte 2</b> (Impostazioni → WhatsApp). Finché non c'è, qui non arrivano messaggi e non parte niente.</p>
+        <div class="schede" role="tablist" aria-label="Quali chat">
+          <button role="tab" data-vista="privato" aria-selected="false">Privato</button>
+          <button role="tab" data-vista="lavoro" aria-selected="false">Lavoro</button>
+          <button role="tab" data-vista="tutto" aria-selected="true">Tutto</button>
+        </div>
+        <div class="riga-filtri">
+          <label>Periodo
+            <select id="waGiorni">
+              <option value="2">Oggi e ieri</option>
+              <option value="7" selected>Ultimi 7 giorni</option>
+              <option value="30">Ultimi 30 giorni</option>
+            </select>
+          </label>
+          <label class="spunta"><input id="waUrgenti" type="checkbox"> Solo urgenti</label>
+          <button id="waAggiorna" type="button" class="secondario">Aggiorna ora</button>
+        </div>
+        <p id="waStato" class="esito" role="status" aria-live="polite"></p>
+        <div id="waDomande" class="wa-domande" aria-live="polite"></div>
+        <div id="waGruppi" class="posta-gruppi" aria-live="polite"></div>
       </section>
 
       <!-- MEMORIA -->
@@ -319,6 +346,64 @@
             <p id="esitoConferme" class="esito" role="status"></p>
           </fieldset>
         </section>
+
+        <!-- WHATSAPP (Fase 3) -->
+        <form id="formWhatsapp" class="modulo" autocomplete="off">
+          <fieldset>
+            <legend>WhatsApp</legend>
+            <p class="avviso-forte">Il collegamento vero con WhatsApp arriva nella <b>parte 2</b>, dopo il passaggio del numero all'app WhatsApp Business e la scelta (da approvare) tra Meta diretto e un fornitore. Questi campi serviranno allora: finché mancano, Jarvis non riceve e non manda niente.</p>
+            <p class="aiuto">Stato: <b id="waStatoColl">Non collegato</b></p>
+            <label>Come si collega
+              <select id="waProvider">
+                <option value="meta">Direttamente con Meta (Cloud API)</option>
+                <option value="bsp">Tramite un fornitore (per esempio 360dialog)</option>
+              </select>
+            </label>
+            <div id="waCampiMeta" class="sottomodulo">
+              <label>Versione della Graph API di Meta
+                <input id="waVersione" maxlength="10" placeholder="v27.0" spellcheck="false">
+              </label>
+            </div>
+            <div id="waCampiBsp" class="sottomodulo" hidden>
+              <label>Indirizzo del fornitore (https)
+                <input id="waBase" type="url" maxlength="300" placeholder="https://waba-v2.360dialog.io" spellcheck="false">
+              </label>
+              <label>Nome dell'intestazione con la chiave
+                <input id="waIntestazione" maxlength="40" placeholder="D360-API-KEY" spellcheck="false">
+              </label>
+            </div>
+            <label>Id del numero (phone_number_id)
+              <input id="waPhoneId" inputmode="numeric" maxlength="30" spellcheck="false">
+            </label>
+            <label><span id="waEtichettaToken">Token di accesso di Meta</span>
+              <input id="waToken" type="password" maxlength="1000" autocomplete="new-password" placeholder="lascia vuoto per non cambiarlo" aria-describedby="waTokenStato">
+            </label>
+            <p id="waTokenStato" class="aiuto">Impostato: no.</p>
+            <label>Segreto dell'app di Meta (App Secret)
+              <input id="waSegreto" type="password" maxlength="200" autocomplete="new-password" placeholder="lascia vuoto per non cambiarlo" aria-describedby="waSegretoStato">
+            </label>
+            <p id="waSegretoStato" class="aiuto">Impostato: no. Serve a controllare che ogni messaggio arrivi davvero da Meta.</p>
+            <label>Parola di verifica (Verify Token)
+              <input id="waVerifica" type="password" maxlength="200" autocomplete="new-password" placeholder="lascia vuoto per non cambiarla" aria-describedby="waVerificaStato">
+            </label>
+            <p id="waVerificaStato" class="aiuto">Impostata: no.</p>
+            <button type="button" id="waGenera" class="secondario">Genera una parola di verifica</button>
+            <p class="aiuto">Indirizzo del webhook da scrivere nel pannello di Meta (Callback URL): <code id="waUrl" class="testo-lungo"></code></p>
+            <div class="azioni-modulo">
+              <button class="primario" type="submit">Salva</button>
+              <button id="waScollega" class="secondario" type="button">Scollega</button>
+            </div>
+            <p id="esitoWhatsapp" class="esito" role="status" aria-live="polite"></p>
+          </fieldset>
+          <fieldset>
+            <legend>WhatsApp: conferme automatiche e notifiche</legend>
+            <label class="spunta"><input id="waConferme" type="checkbox" aria-describedby="avvisoWaConferme"> Attiva le conferme di ricezione automatiche su WhatsApp</label>
+            <p id="avvisoWaConferme" class="avviso-forte">Se le attivi, Jarvis risponde da solo «Abbiamo ricevuto il suo messaggio, le risponderemo appena possibile» ad alcuni messaggi nuovi dei contatti delle aziende. Mai nei gruppi, mai ai contatti privati, mai se il messaggio parla di soldi, fatture, preventivi, scadenze o impegni (anche negli allegati), mai se hai già risposto tu, mai dopo 24 ore. Al massimo una per contatto ogni 7 giorni e 20 al giorno. Nel dubbio non risponde.</p>
+            <label class="spunta"><input id="waNascondi" type="checkbox"> Nascondi il contenuto nelle notifiche (niente nome del contatto: solo l'azienda e «messaggio urgente»)</label>
+            <p class="aiuto">Nelle notifiche non c'è mai il testo dei messaggi né il numero di telefono.</p>
+            <p id="esitoWaOpzioni" class="esito" role="status" aria-live="polite"></p>
+          </fieldset>
+        </form>
 
         <!-- CALENDARIO APPLE -->
         <form id="formApple" class="modulo" autocomplete="off">
