@@ -154,9 +154,38 @@ con il DNS (nessun indirizzo interno) al salvataggio e a ogni invio.
   sull'azienda di un contatto.
 - Il testo dei messaggi va all'AI solo tra i delimitatori dei dati, una chat per richiesta, senza strumenti (test «iniezione»).
 
+## Fase 3b: le 20 funzioni WhatsApp
+
+Ogni punto ha un test in `test/funzioni.test.ts`.
+- **Nessun record definitivo in Costructo.** L'unica scrittura è `POST /v1/proposte` (bozze che Luigi approva in Costructo).
+  Parte solo con `{conferma: true}` e l'**impronta SHA-256** del testo completo di ogni proposta, mostrato a Luigi: se cambia un
+  campo, la conferma non vale. Dalla chat: azione `costructo.proposta` in `SEMPRE_CONFERMA`. Invii automatici solo per i tipi
+  accesi da Luigi (spenti di serie); mai per il privato, mai proposte incomplete. Prima di ogni invio i dati si controllano con zod.
+- **Idempotenza**: chiave doppione fissa (`wa:<id del messaggio>:<tipo>`). Ripetere non crea doppioni; il 409 di Costructo
+  → «già presente in Costructo» e nient'altro; 404/405/403 → la proposta resta in Jarvis.
+- **Privato**: le proposte private vanno solo nell'agenda di Jarvis (il codice rifiuta un tipo di Costructo con «privato»).
+  Nella scheda Lavoro non si vedono; la ricerca unica nella scheda Tutto include il privato solo se Luigi lo chiede **con le sue parole**.
+  Chat private escludibili.
+- **Per azienda**: un contatto «da assegnare» non produce niente finché Luigi non sceglie. «Documenti al volo» rifiuta i documenti di
+  un'altra azienda o di un subappaltatore, e rifiuta se Luigi nomina un'azienda diversa da quella chiesta dall'AI.
+- **Operai**: chi è operaio lo dice Luigi. La **posizione degli operai non si salva e non si usa mai** (GDPR); quando un contatto
+  diventa operaio, le sue posizioni già salvate si cancellano.
+- **Allegati**: scaricamento spento di serie; solo per i contatti delle aziende; token solo verso `graph.facebook.com`,
+  `*.fbsbx.com`, `*.whatsapp.net` o il fornitore configurato; niente reindirizzamenti; al massimo 10 MB (16 MB per i vocali);
+  impronta del contenuto controllata; solo JPEG, PNG, HEIC, WebP e PDF. Mostrati nella pagina con `Content-Security-Policy: sandbox`.
+- **Vocali**: trascrizione spenta di serie; chiavi (Google, OpenAI) nel segreto cifrato `trascrizione`, **mai restituite** né nel registro;
+  l'audio sta solo in memoria e si azzera dopo la trascrizione; costo stimato prima e contato nel tetto di spesa.
+- **Mai mandato da Jarvis**: solleciti, preventivi e promemoria sono link wa.me aperti da Luigi. I modelli di Meta sono spenti di serie;
+  accesi, partono solo con `{conferma: true}` e l'impronta di numero + modello.
+- **AI**: Haiku solo per estrarre (richieste di lavoro), un messaggio per richiesta, tra i delimitatori dei dati, senza strumenti,
+  sotto il tetto di spesa, con la risposta controllata da zod. Le risposte proposte dall'AI non contengono prezzi o importi
+  (si tolgono e si scrive «[da completare]»).
+- **Registro**: mai i testi dei messaggi, numeri solo mascherati.
+
 ## Cosa resta aperto (da valutare)
 - Il limite tentativi si basa sull'IP: su Railway serve `JARVIS_PROXY=1` (vedi «Accesso»).
 - Il riconoscimento vocale del browser (Chrome) manda l'audio ai server di Google; Safari usa i servizi Apple. Va detto a Luigi.
 - Le conversazioni vengono inviate a Anthropic per avere la risposta (nessun addestramento per le API, secondo i termini commerciali; da confermare nella revisione).
 - Fase 3: anche i messaggi WhatsApp (testo breve) vanno a Anthropic per il riassunto. Il webhook è pubblico: la sua sicurezza dipende dal segreto dell'app di Meta, da tenere riservato.
+- Fase 3b: se Luigi accende la trascrizione, i vocali vanno a Google o a OpenAI. Le proposte (anche con foto e PDF) vanno a Costructo.
 - Fase 2: anche il testo breve delle mail va a Anthropic per il riassunto. La notifica di mail urgente mostra mittente e oggetto sulla schermata bloccata.
