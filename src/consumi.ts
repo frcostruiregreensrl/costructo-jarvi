@@ -60,3 +60,19 @@ export function riepilogoMese(db: Db, tettoUsd: number, fuso: string, ora = Date
     quasi: tot.spesa >= tettoUsd * 0.8,
   };
 }
+
+// ---------------------------------------------------------------- coda delle chiamate all'AI
+// Le chiamate al cervello passano una per volta (Jarvis ha un solo utente): prima di ognuna chi chiama
+// ricontrolla la spesa del mese più una stima prudente del costo; il consumo vero si registra prima di
+// lasciare il posto alla successiva. Vale per le domande di Luigi E per la classificazione della posta:
+// dieci richieste in parallelo non sfondano il tetto.
+const code = new WeakMap<Db, Promise<void>>();
+
+export async function inCoda<T>(db: Db, fn: () => Promise<T>): Promise<T> {
+  const prima = code.get(db) ?? Promise.resolve();
+  let libera!: () => void;
+  const mia = new Promise<void>((r) => { libera = r; });
+  code.set(db, prima.then(() => mia));
+  await prima;
+  try { return await fn(); } finally { libera(); }
+}

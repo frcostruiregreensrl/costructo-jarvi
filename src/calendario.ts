@@ -99,7 +99,7 @@ export function ipPrivato(ip: string): boolean {
 }
 
 export type RisolviNome = (host: string) => Promise<string[]>;
-const risolviPredefinito: RisolviNome = async (host) => (await lookup(host, { all: true, verbatim: true })).map((r) => r.address);
+export const risolviPredefinito: RisolviNome = async (host) => (await lookup(host, { all: true, verbatim: true })).map((r) => r.address);
 
 async function indirizziAmmessi(host: string, risolvi: RisolviNome): Promise<string[]> {
   const indirizzi = isIP(host) ? [host] : await risolvi(host);

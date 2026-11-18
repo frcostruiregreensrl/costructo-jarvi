@@ -16,6 +16,11 @@ export const SchemaImpostazioni = z.object({
   /** In Fase 1 ElevenLabs resta spento: il campo esiste solo per mostrarlo nelle impostazioni. */
   elevenLabsAttivo: z.literal(false).default(false),
   tema: z.enum(["automatico", "chiaro", "scuro"]).default("automatico"),
+  /**
+   * Interruttore generale delle conferme di ricezione automatiche (Fase 2). Spento di serie:
+   * anche con una casella che le permette, finché questo è spento Jarvis non manda niente.
+   */
+  confermeAutomaticheAttive: z.boolean().default(false),
 });
 export type Impostazioni = z.infer<typeof SchemaImpostazioni>;
 
@@ -43,8 +48,9 @@ export function scriviValore(db: Db, chiave: string, valore: unknown): void {
     .run(`_${chiave}`, JSON.stringify(valore));
 }
 
-// ---------------------------------------------------------------- segreti cifrati (token Costructo, elenco delle aziende con i loro token, link iCal…)
-export type NomeSegreto = "costructo_url" | "costructo_token" | "costructo_aziende" | "calendario_ical" | "elevenlabs_chiave";
+// ---------------------------------------------------------------- segreti cifrati (token Costructo, elenco delle aziende con i loro token, link iCal,
+// caselle email con le password, Apple ID con la password specifica per le app…)
+export type NomeSegreto = "costructo_url" | "costructo_token" | "costructo_aziende" | "calendario_ical" | "elevenlabs_chiave" | "posta_caselle" | "calendario_apple";
 
 export function salvaSegreto(db: Db, c: Cifratore, nome: NomeSegreto, valore: string): void {
   if (!valore) { db.prepare("DELETE FROM segreti WHERE nome = ?").run(nome); return; }

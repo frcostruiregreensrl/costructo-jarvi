@@ -2,7 +2,9 @@
 import { leggiConfig } from "./config.js";
 import { apriDb } from "./db.js";
 import { creaCifratore } from "./sicurezza/cifra.js";
-import { creaApp } from "./app.js";
+import { creaApp, type ServiziApp } from "./app.js";
+import { pulisciPostaVecchia } from "./posta/archivio.js";
+import { leggiApple, eventiApple } from "./calendarioApple.js";
 import { pulisciConversazioniVecchie } from "./conversazioni.js";
 import { creaInvio, controllaOraBriefing } from "./push.js";
 import { creaBriefing, notificheDelMattino } from "./briefing.js";
@@ -33,6 +35,9 @@ function pulizia() {
   if (tolti) registra(db, "conversazioni.pulizia", "fatto", "sistema", { messaggiCancellati: tolti });
   const righe = pulisciRegistroVecchio(db);
   if (righe) registra(db, "registro.pulizia", "fatto", "sistema", { righeAlleggerite: righe });
+  // Fase 2: i dati delle mail (testo breve, riassunti, bozze) si cancellano dopo 30 giorni.
+  const mail = pulisciPostaVecchia(db);
+  if (mail) registra(db, "posta.pulizia", "fatto", "sistema", { mailCancellate: mail });
 }
 pulizia();
 setInterval(pulizia, 6 * 3600_000).unref();
@@ -41,10 +46,15 @@ setInterval(() => {
   controllaOraBriefing(db, config.fusoOrario, async () => {
     // Una notifica per ogni azienda collegata (con una sola azienda: una notifica, come prima).
     const aziende = aziendeCollegate({ db, cifratore, urlAmbiente: config.costructoUrl, tokenAmbiente: config.costructoToken });
-    const b = await creaBriefing({ db, fuso: config.fusoOrario, aziende, linkCalendario: leggiSegreto(db, cifratore, "calendario_ical") });
+    const servizi = app.locals.servizi as ServiziApp;
+    const calendarioApple = leggiApple(servizi.apple) ? (da: number, a: number) => eventiApple(servizi.apple, da, a, config.fusoOrario) : undefined;
+    const b = await creaBriefing({ db, fuso: config.fusoOrario, aziende, linkCalendario: leggiSegreto(db, cifratore, "calendario_ical"), calendarioApple });
     return notificheDelMattino(b);
   }, invia).catch((e) => registra(db, "notifica.briefing", "errore", "sistema", { messaggio: String(e?.message || e) }));
 }, 60_000).unref();
+
+// Fase 2: giro della posta ogni 5 minuti (lettura in sola lettura, riassunti, conferme ammesse, notifiche urgenti).
+(app.locals.servizi as ServiziApp).posta.avvia();
 
 app.listen(config.porta, config.host, () => {
   console.log(`Jarvis è attivo su http://${config.host}:${config.porta}`);

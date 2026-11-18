@@ -7,14 +7,16 @@ import type { AziendaCollegata } from "./aziende.js";
 import { provaConto, diciNumero } from "./calcolo.js";
 import { apriConversazione, aggiungiMessaggio, ultimiMessaggi } from "./conversazioni.js";
 import { leggiImpostazioni } from "./impostazioni.js";
-import { riepilogoMese, registraConsumo, costoUsd, stimaToken } from "./consumi.js";
+import { riepilogoMese, registraConsumo, costoUsd, stimaToken, inCoda } from "./consumi.js";
 import { registra } from "./registro.js";
 import { elencaMemorie, type Vista } from "./memorie.js";
 import { impegniProssimiGiorni, descriviImpegno } from "./agenda.js";
 import { marcaDati } from "./dati.js";
 import { promptDiSistema } from "./prompt.js";
 import { descriviAdesso } from "./tempo.js";
-import { eseguiStrumento, strumentiPerVista, confermeAperte, rispondiConferma, type EventoFlusso, type ConfermaAperta } from "./strumenti.js";
+import { eseguiStrumento, strumentiPerVista, confermeAperte, rispondiConferma, type EventoFlusso, type ConfermaAperta, type ContestoStrumenti } from "./strumenti.js";
+import type { DipendenzePosta } from "./posta/tipi.js";
+import { riepilogoPerTurno } from "./posta/strumentiPosta.js";
 
 export interface Dipendenze {
   db: Db;
@@ -26,6 +28,10 @@ export interface Dipendenze {
   aziende: () => AziendaCollegata[];
   linkCalendario: () => string;
   fetchFn?: typeof fetch;
+  /** Fase 2: posta (assente = nessuna casella). */
+  posta?: DipendenzePosta;
+  /** Fase 2: calendari Apple scelti. */
+  calendarioApple?: ContestoStrumenti["calendarioApple"];
 }
 
 export interface Domanda { messaggio: string; vista: Vista; conversazione?: string }
@@ -59,7 +65,7 @@ export function leggiRispostaConferma(messaggio: string): RispostaConferma | nul
   return null;
 }
 
-function gestisciConferma(dip: Dipendenze, aperte: ConfermaAperta[], r: RispostaConferma, s: string): { messaggio: string; fatto: boolean } {
+async function gestisciConferma(dip: Dipendenze, aperte: ConfermaAperta[], r: RispostaConferma, s: string): Promise<{ messaggio: string; fatto: boolean }> {
   // Quando Jarvis richiede, la domanda torna "appena fatta": la risposta al turno dopo vale ancora.
   const rinnova = () => { for (const c of aperte) dip.db.prepare("UPDATE conferme SET creata = ? WHERE id = ? AND stato = 'in_attesa'").run(Date.now(), c.id); };
   const richiedi = (quale: boolean) => (rinnova(), {
@@ -69,7 +75,7 @@ function gestisciConferma(dip: Dipendenze, aperte: ConfermaAperta[], r: Risposta
       : `${s}, non ho capito se vuoi confermare. Premi il pulsante oppure rispondi «sì, conferma»; per lasciar perdere, «annulla».`,
   });
   if (r.tipo === "no") {
-    for (const c of aperte) rispondiConferma(dip.db, c.id, "annulla", dip.fuso);
+    for (const c of aperte) await rispondiConferma(dip.db, c.id, "annulla", dip.fuso);
     return { fatto: true, messaggio: "Va bene, non faccio niente." };
   }
   if (aperte.length > 1) {
@@ -81,11 +87,11 @@ function gestisciConferma(dip: Dipendenze, aperte: ConfermaAperta[], r: Risposta
   if (r.tipo === "dubbio") return richiedi(!!scelta && scelta.length > 1);
   if (r.tipo === "si") {
     if (scelta && scelta.length > 1) return richiedi(true);
-    const esito = rispondiConferma(dip.db, c.id, "conferma", dip.fuso);
+    const esito = await rispondiConferma(dip.db, c.id, "conferma", dip.fuso, Date.now(), dip.posta);
     return { fatto: esito.ok, messaggio: esito.messaggio };
   }
   if (!scelta || r.indice >= scelta.length) return richiedi(!!scelta);
-  const esito = rispondiConferma(dip.db, c.id, r.indice, dip.fuso);
+  const esito = await rispondiConferma(dip.db, c.id, r.indice, dip.fuso, Date.now(), dip.posta);
   return { fatto: esito.ok, messaggio: esito.messaggio };
 }
 
@@ -93,16 +99,7 @@ function gestisciConferma(dip: Dipendenze, aperte: ConfermaAperta[], r: Risposta
 // Le chiamate al cervello passano una per volta (Jarvis ha un solo utente): prima di ognuna si
 // ricontrolla la spesa del mese più una stima prudente del costo della chiamata; il consumo vero si
 // registra prima di lasciare il posto alla successiva. Così dieci domande in parallelo non sfondano il tetto.
-const code = new WeakMap<Db, Promise<void>>();
-
-async function inCoda<T>(db: Db, fn: () => Promise<T>): Promise<T> {
-  const prima = code.get(db) ?? Promise.resolve();
-  let libera!: () => void;
-  const mia = new Promise<void>((r) => { libera = r; });
-  code.set(db, prima.then(() => mia));
-  await prima;
-  try { return await fn(); } finally { libera(); }
-}
+// La coda è in consumi.ts (inCoda): la usa anche la classificazione della posta.
 
 /** Token in ingresso stimati di una richiesta (sistema + messaggi + strumenti). */
 function stimaIngresso(r: RichiestaPasso): number {
@@ -143,7 +140,7 @@ export async function rispondi(dip: Dipendenze, d: Domanda, emetti: (e: EventoFl
   const aperte = ultimaDomanda === undefined ? [] : confermeAperte(db, conv, ultimaDomanda);
   const risposta = aperte.length ? leggiRispostaConferma(messaggio) : null;
   if (risposta) {
-    const r = gestisciConferma(dip, aperte, risposta, s);
+    const r = await gestisciConferma(dip, aperte, risposta, s);
     if (r.fatto) emetti({ tipo: "agenda" });
     di(r.messaggio);
     return chiudi();
@@ -184,7 +181,7 @@ export async function rispondi(dip: Dipendenze, d: Domanda, emetti: (e: EventoFl
 
   const aziende = dip.aziende().filter((a) => a.client.configurato);
   const messaggi: MessaggioCervello[] = storia.map((m) => (m.ruolo === "utente" ? { ruolo: "utente", testo: m.testo } : { ruolo: "jarvis", testo: m.testo, chiamate: [] }));
-  messaggi.push({ ruolo: "utente", testo: contestoDelTurno(dip, d.vista, aziende) + `\n\nMessaggio di Luigi:\n${messaggio}` });
+  messaggi.push({ ruolo: "utente", testo: contestoDelTurno(dip, d.vista, aziende, dip.posta) + `\n\nMessaggio di Luigi:\n${messaggio}` });
   const strumenti = strumentiPerVista(d.vista);
   const scritture = new Map<string, number>();
 
@@ -241,7 +238,7 @@ export async function rispondi(dip: Dipendenze, d: Domanda, emetti: (e: EventoFl
       for (const ch of r.chiamate) {
         const esito = await eseguiStrumento(ch.nome, ch.input, {
           db, fuso, vista: d.vista, messaggioLuigi: messaggio, conversazione: conv, aziende,
-          linkCalendario: dip.linkCalendario, emetti, fetchFn: dip.fetchFn, scritture,
+          linkCalendario: dip.linkCalendario, emetti, fetchFn: dip.fetchFn, scritture, posta: dip.posta, calendarioApple: dip.calendarioApple,
         });
         risultati.push({ id: ch.id, contenuto: esito.contenuto, errore: esito.errore });
       }
@@ -266,8 +263,8 @@ export async function rispondi(dip: Dipendenze, d: Domanda, emetti: (e: EventoFl
   return chiudi();
 }
 
-/** Contesto che cambia a ogni turno: data, aziende collegate, agenda locale, ricordi. Tutto marcato come dati. */
-export function contestoDelTurno(dip: Pick<Dipendenze, "db" | "fuso">, vista: Vista, aziende: AziendaCollegata[]): string {
+/** Contesto che cambia a ogni turno: data, aziende collegate, posta, agenda locale, ricordi. Tutto marcato come dati. */
+export function contestoDelTurno(dip: Pick<Dipendenze, "db" | "fuso">, vista: Vista, aziende: AziendaCollegata[], posta?: DipendenzePosta): string {
   const ora = Date.now();
   const disponibile = aziende.length > 0 && vista !== "privato";
   const parti = [
@@ -282,6 +279,11 @@ export function contestoDelTurno(dip: Pick<Dipendenze, "db" | "fuso">, vista: Vi
       marcaDati("aziende", aziende.map((a) => a.nome || "Costructo")),
     );
   }
+  const riepilogoPosta = posta ? riepilogoPerTurno({ db: dip.db, cifratore: posta.cifratore, fuso: dip.fuso, vista, aziende: posta.aziende() }) : null;
+  parti.push(riepilogoPosta
+    ? "Posta: caselle visibili in questa scheda (sola lettura e bozze; usa gli strumenti posta_*), divise per azienda o privato:"
+    : "Posta: nessuna casella visibile in questa scheda.");
+  if (riepilogoPosta) parti.push(riepilogoPosta);
   parti.push(
     "Ricordi:",
     marcaDati("memoria", elencaMemorie(dip.db, vista).slice(0, 60).map((m) => `[${m.spazio}] ${m.testo}`)),

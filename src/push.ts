@@ -28,19 +28,19 @@ export function creaInvio(vapid: { pubblica: string; privata: string; contatto: 
   return (i, corpo) => webpush.sendNotification(i, corpo, { TTL: 3600, urgency: "normal" });
 }
 
-export async function inviaATutti(db: Db, invia: Invia, titolo: string, testo: string): Promise<number> {
+export async function inviaATutti(db: Db, invia: Invia, titolo: string, testo: string, azione = "notifica.briefing", url = "/"): Promise<number> {
   const righe = db.prepare("SELECT endpoint, dati FROM iscrizioni_push").all() as Array<{ endpoint: string; dati: string }>;
   let ok = 0;
   for (const r of righe) {
     try {
-      await invia(JSON.parse(r.dati), JSON.stringify({ titolo, testo, url: "/" }));
+      await invia(JSON.parse(r.dati), JSON.stringify({ titolo, testo, url }));
       ok++;
     } catch (e) {
       const codice = (e as { statusCode?: number }).statusCode;
       if (codice === 404 || codice === 410) togliIscrizione(db, r.endpoint); // iscrizione scaduta
     }
   }
-  registra(db, "notifica.briefing", ok ? "fatto" : "errore", "sistema", { inviate: ok, iscrizioni: righe.length });
+  registra(db, azione, ok ? "fatto" : "errore", "sistema", { inviate: ok, iscrizioni: righe.length });
   return ok;
 }
 

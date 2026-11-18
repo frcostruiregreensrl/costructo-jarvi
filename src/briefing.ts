@@ -1,5 +1,6 @@
 // Briefing mattutino: impegni, cantieri, scadenze, documenti in scadenza, fatture da incassare, meteo.
 // Con più aziende collegate, la parte di lavoro è divisa per azienda (ogni frase inizia con il nome).
+// Fase 2: mail urgenti per azienda e private (dalle ultime 24 ore) ed eventi dei calendari Apple scelti.
 // Testo costruito SENZA AI (costo zero, nessun rischio di dati inventati).
 import type { Db } from "./db.js";
 import type { ClientCostructo, BriefingCostructo } from "./costructo.js";
@@ -9,6 +10,7 @@ import { leggiImpostazioni } from "./impostazioni.js";
 import { meteoCantieri, type MeteoCantiere } from "./meteo.js";
 import { scaricaCalendario, occorrenze } from "./calendario.js";
 import { inizioGiorno, oraMinuti } from "./tempo.js";
+import type { EventoApple } from "./calendarioApple.js";
 
 export interface RigaBriefing { testo: string; numero?: { id: string; etichetta: string; valore: number; suffisso?: string } }
 export interface CosaImportante { spazio: "privato" | "lavoro"; testo: string; quando?: string; azienda?: string }
@@ -20,7 +22,10 @@ export interface SezioneAzienda {
   /** Frasi di questa azienda (con più aziende iniziano con il nome). */
   righe: RigaBriefing[];
   avvisi: string[];
+  /** Mail urgenti delle caselle di questa azienda (ultime 24 ore). */
+  posta?: PostaUrgente;
 }
+export interface PostaUrgente { urgenti: number; primo?: string }
 export interface Briefing {
   righe: RigaBriefing[];
   adesso: CosaImportante[];
@@ -30,6 +35,8 @@ export interface Briefing {
   aziende: SezioneAzienda[];
   meteo: MeteoCantiere[];
   avvisi: string[];
+  /** Mail urgenti private (ultime 24 ore). */
+  postaPrivata?: PostaUrgente;
 }
 
 const plurale = (n: number, uno: string, tanti: string) => `${n} ${n === 1 ? uno : tanti}`;
@@ -45,7 +52,24 @@ export interface OpzioniBriefing {
   linkCalendario: string;
   fetchFn?: typeof fetch;
   ora?: number;
+  /** Fase 2: eventi dei calendari Apple scelti (privati o di un'azienda). */
+  calendarioApple?: (da: number, a: number) => Promise<{ eventi: EventoApple[]; avvisi: string[] }>;
 }
+
+/** Mail urgenti delle ultime 24 ore, per spazio (id dell'azienda o «privato»). */
+function postaUrgente(db: Db, ora: number): Map<string, PostaUrgente> {
+  const righe = db.prepare("SELECT spazio, oggetto, da_nome, da_indirizzo FROM posta_messaggi WHERE urgente = 1 AND data >= ? ORDER BY data DESC").all(ora - 864e5) as
+    Array<{ spazio: string; oggetto: string; da_nome: string; da_indirizzo: string }>;
+  const out = new Map<string, PostaUrgente>();
+  for (const r of righe) {
+    const p = out.get(r.spazio) ?? { urgenti: 0 };
+    p.urgenti++;
+    p.primo = `${r.oggetto || "(senza oggetto)"} (da ${r.da_nome || r.da_indirizzo})`.slice(0, 120); // l'ultima letta è la più vecchia: la prima arrivata
+    out.set(r.spazio, p);
+  }
+  return out;
+}
+const fraseUrgenti = (p: PostaUrgente) => `${plurale(p.urgenti, "mail urgente", "mail urgenti")}${p.primo ? `, ${p.urgenti === 1 ? "" : "la prima: "}«${p.primo}»` : ""}`;
 
 /** Frasi del lavoro di una azienda. Con più aziende una sola frase che inizia con il nome. */
 function righeLavoro(lavoro: BriefingCostructo, nome: string, id: string, piu: boolean): RigaBriefing[] {
@@ -87,6 +111,18 @@ export async function creaBriefing(o: OpzioniBriefing): Promise<Briefing> {
       for (const e of ev) oggi.push({ ora: e.tuttoIlGiorno ? "" : oraMinuti(e.inizio, o.fuso), titolo: e.titolo, spazio: "privato" });
     } catch (e) { avvisi.push(`Calendario: ${(e as Error).message}`); }
   }
+  let eventiApple: EventoApple[] = [];
+  if (o.calendarioApple) {
+    try {
+      const r = await o.calendarioApple(inizio, fine);
+      eventiApple = r.eventi;
+      avvisi.push(...r.avvisi);
+    } catch (e) { avvisi.push(`Calendario Apple: ${(e as Error).message}`); }
+  }
+  for (const e of eventiApple.filter((x) => x.spazio === "privato")) {
+    oggi.push({ ora: e.tuttoIlGiorno ? "" : oraMinuti(e.inizio, o.fuso), titolo: e.titolo, spazio: "privato" });
+  }
+  const posta = postaUrgente(o.db, ora);
 
   // ---- lavoro: ogni azienda per conto suo; l'errore di una non ferma le altre
   const elenco: AziendaCollegata[] = (o.aziende ?? (o.costructo ? [{ id: "principale", nome: "", client: o.costructo }] : [])).filter((a) => a.client.configurato);
@@ -98,7 +134,22 @@ export async function creaBriefing(o: OpzioniBriefing): Promise<Briefing> {
     sez.righe = sez.lavoro ? righeLavoro(sez.lavoro, a.nome, a.id, piu) : piu ? [{ testo: `${a.nome}: Costructo non ha risposto.` }] : [];
     return sez;
   }));
-  for (const sez of aziende) avvisi.push(...sez.avvisi);
+  for (const sez of aziende) {
+    avvisi.push(...sez.avvisi);
+    const p = posta.get(sez.id);
+    if (p) {
+      sez.posta = p;
+      if (piu && sez.righe[0]) sez.righe[0] = { ...sez.righe[0], testo: `${sez.righe[0].testo.replace(/\.$/, "")}; ${fraseUrgenti(p)}.` };
+      else if (piu) sez.righe.push({ testo: `${sez.nome}: ${fraseUrgenti(p)}.` });
+      else sez.righe.push({ testo: `Posta di lavoro: ${fraseUrgenti(p)}.` });
+    }
+  }
+  // Calendari Apple delle aziende: l'evento dice sempre di quale azienda è.
+  for (const e of eventiApple.filter((x) => x.spazio !== "privato")) {
+    const sez = aziende.find((a) => a.id === e.spazio);
+    const nome = sez?.nome ?? "";
+    oggi.push({ ora: e.tuttoIlGiorno ? "" : oraMinuti(e.inizio, o.fuso), titolo: piu && nome ? `${nome}: ${e.titolo}` : e.titolo, spazio: "lavoro", ...(nome ? { azienda: nome } : {}) });
+  }
   for (const sez of aziende) {
     for (const i of sez.lavoro?.impegni ?? []) {
       const t = i.inizio ? Date.parse(i.inizio) : NaN;
@@ -120,6 +171,12 @@ export async function creaBriefing(o: OpzioniBriefing): Promise<Briefing> {
     numero: { id: "agenda", etichetta: "IMPEGNI OGGI", valore: oggi.length },
   });
   for (const sez of aziende) righe.push(...sez.righe);
+  // Mail urgenti di caselle di aziende che oggi non hanno una sezione (Costructo non collegato)
+  const senzaSezione = [...posta.entries()].filter(([spazio]) => spazio !== "privato" && !aziende.some((a) => a.id === spazio));
+  const altre = senzaSezione.reduce((t, [, p]) => t + p.urgenti, 0);
+  if (altre) righe.push({ testo: `Posta di lavoro: ${plurale(altre, "mail urgente", "mail urgenti")}.` });
+  const postaPrivata = posta.get("privato");
+  if (postaPrivata) righe.push({ testo: `Posta privata: ${fraseUrgenti(postaPrivata)}.` });
   const pioggia = meteo.filter((m) => (m.pioggia ?? 0) >= 60);
   if (pioggia.length) righe.push({ testo: `Oggi è probabile pioggia su: ${pioggia.map((m) => m.cantiere).join(", ")}.` });
   if (avvisi.length) righe.push({ testo: "Alcune fonti non hanno risposto: trovi i dettagli sullo schermo." });
@@ -130,8 +187,10 @@ export async function creaBriefing(o: OpzioniBriefing): Promise<Briefing> {
   const conNome = (sez: SezioneAzienda, t: string) => (piu ? `${sez.nome}: ${t}` : t);
   const lavoroDi = (sez: SezioneAzienda) => (sez.nome ? { azienda: sez.nome } : {});
   // Prima una cosa per azienda (scadenza, poi documento, poi fattura), poi le altre: ogni azienda ha il suo posto.
+  if (postaPrivata?.primo) adesso.push({ spazio: "privato", testo: `Mail urgente: ${postaPrivata.primo}` });
   const candidati = aziende.map((sez) => {
     const l: CosaImportante[] = [];
+    if (sez.posta?.primo) l.push({ spazio: "lavoro", testo: conNome(sez, `Mail urgente: ${sez.posta.primo}`), ...lavoroDi(sez) });
     const sc = sez.lavoro?.scadenze?.[0], d = sez.lavoro?.documentiInScadenza?.[0], f = sez.lavoro?.fattureDaIncassare?.[0];
     if (sc) l.push({ spazio: "lavoro", testo: conNome(sez, sc.titolo || sc.descrizione || "Scadenza"), quando: sc.scadenza || sc.data, ...lavoroDi(sez) });
     if (d) l.push({ spazio: "lavoro", testo: conNome(sez, `Documento: ${d.titolo || d.nome || "in scadenza"}`), quando: d.scadenza, ...lavoroDi(sez) });
@@ -143,7 +202,7 @@ export async function creaBriefing(o: OpzioniBriefing): Promise<Briefing> {
     const prossimi = impegniProssimiGiorni(o.db, 7, o.fuso, ora).filter((i) => i.inizio >= fine).slice(0, 3 - adesso.length);
     for (const i of prossimi) adesso.push({ spazio: "privato", testo: descriviImpegno(i, o.fuso) });
   }
-  return { righe, adesso: adesso.slice(0, 3), oggi, lavoro: piu ? null : (aziende[0]?.lavoro ?? null), aziende, meteo, avvisi };
+  return { righe, adesso: adesso.slice(0, 3), oggi, lavoro: piu ? null : (aziende[0]?.lavoro ?? null), aziende, meteo, avvisi, ...(postaPrivata ? { postaPrivata } : {}) };
 }
 
 /** Testo breve per la notifica del mattino (una sola azienda o nessuna). */
@@ -171,9 +230,13 @@ export function notificheDelMattino(b: Briefing): Notifica[] {
     return { titolo: `${sez.nome} · ${TITOLO_NOTIFICA}`.slice(0, 80), testo: (testo.startsWith(sez.nome) ? testo : `${sez.nome}: ${testo}`).slice(0, 180) };
   });
   const privati = b.oggi.filter((x) => x.spazio === "privato");
-  if (privati.length) {
+  if (privati.length || b.postaPrivata) {
     const primo = privati.find((x) => x.ora);
-    out.push({ titolo: TITOLO_NOTIFICA, testo: `Oggi hai ${plurale(privati.length, "impegno personale", "impegni personali")}${primo ? `, il primo alle ${primo.ora}: ${primo.titolo}` : ""}.`.slice(0, 180) });
+    const frasi = [
+      ...(privati.length ? [`Oggi hai ${plurale(privati.length, "impegno personale", "impegni personali")}${primo ? `, il primo alle ${primo.ora}: ${primo.titolo}` : ""}.`] : []),
+      ...(b.postaPrivata ? [`Posta privata: ${plurale(b.postaPrivata.urgenti, "mail urgente", "mail urgenti")}.`] : []),
+    ];
+    out.push({ titolo: TITOLO_NOTIFICA, testo: frasi.join(" ").slice(0, 180) });
   }
   return out;
 }

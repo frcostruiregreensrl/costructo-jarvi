@@ -27,6 +27,14 @@ import { rispondi } from "./assistente.js";
 import { rispondiConferma } from "./strumenti.js";
 import { SchemaIscrizione, salvaIscrizione, togliIscrizione, inviaATutti, type Invia } from "./push.js";
 import { oraMinuti } from "./tempo.js";
+import type { RisolviNome } from "./calendario.js";
+import type { ApriImap, PostaInUscita, DipendenzePosta } from "./posta/tipi.js";
+import { creaApriImap } from "./posta/imap.js";
+import { creaPostaInUscita } from "./posta/uscita.js";
+import { creaServizioPosta, type ServizioPosta } from "./posta/servizio.js";
+import { leggiCaselle } from "./posta/caselle.js";
+import { leggiApple, eventiApple, type FonteApple } from "./calendarioApple.js";
+import { montaRotteFase2 } from "./rotteFase2.js";
 
 export interface OpzioniApp {
   config: Config;
@@ -37,7 +45,15 @@ export interface OpzioniApp {
   fetchFn?: typeof fetch;
   invia?: Invia | null;
   cartellaPubblica?: string;
+  /** Fase 2, solo per i test: IMAP e SMTP finti, risoluzione dei nomi finta, fetch verso un iCloud finto. */
+  apriImap?: ApriImap;
+  uscita?: PostaInUscita;
+  risolvi?: RisolviNome;
+  fetchApple?: typeof fetch;
 }
+
+/** Servizi della Fase 2, raggiungibili da server.ts (giro della posta ogni 5 minuti). */
+export interface ServiziApp { posta: ServizioPosta; apple: FonteApple }
 
 const qui = fileURLToPath(new URL(".", import.meta.url));
 const VISTA = z.enum(["privato", "lavoro", "tutto"]);
@@ -177,11 +193,25 @@ export function creaApp(o: OpzioniApp) {
     cervelloCache ??= caricaCervelloAnthropic(config.anthropicApiKey).catch((e) => { cervelloCache = null; throw e; });
     return cervelloCache;
   });
+  // Fase 2: posta e calendario Apple. Le caselle appartengono alle aziende dell'elenco (anche senza indirizzo di Costructo).
+  const aziendePosta = () => leggiAziende(fonte).map((a) => ({ id: a.id, nome: a.nome }));
+  const dipPosta: DipendenzePosta = {
+    db, cifratore, fuso: config.fusoOrario,
+    apriImap: o.apriImap ?? creaApriImap({ risolvi: o.risolvi }),
+    uscita: o.uscita ?? creaPostaInUscita({ risolvi: o.risolvi }),
+    cervello, modello: config.modelloPredefinito, aziende: aziendePosta, invia: o.invia ?? null, risolvi: o.risolvi,
+  };
+  const servizioPosta = creaServizioPosta(dipPosta);
+  const fonteApple: FonteApple = { db, cifratore, fetchFn: o.fetchApple };
+  /** Eventi dei calendari Apple scelti; undefined se il calendario Apple non è collegato. */
+  const calendarioApple = () => (leggiApple(fonteApple) ? (da: number, a: number) => eventiApple(fonteApple, da, a, config.fusoOrario) : undefined);
+  app.locals.servizi = { posta: servizioPosta, apple: fonteApple } satisfies ServiziApp;
+
   const dip = {
     db, fuso: config.fusoOrario, modelloPredefinito: config.modelloPredefinito, modelloApprofondito: config.modelloApprofondito,
-    cervello, aziende, linkCalendario, fetchFn: o.fetchFn,
+    cervello, aziende, linkCalendario, fetchFn: o.fetchFn, posta: dipPosta,
   };
-  const prepara = () => creaBriefing({ db, fuso: config.fusoOrario, aziende: aziende(), linkCalendario: linkCalendario(), fetchFn: o.fetchFn });
+  const prepara = () => creaBriefing({ db, fuso: config.fusoOrario, aziende: aziende(), linkCalendario: linkCalendario(), fetchFn: o.fetchFn, calendarioApple: calendarioApple() });
 
   // ------------------------------------------------------------ avvio, briefing, domanda
   app.get("/api/avvio", (_req, res) => {
@@ -200,17 +230,17 @@ export function creaApp(o: OpzioniApp) {
     res.on("close", () => { if (!res.writableEnded) ctrl.abort(); });
     const emetti = (e: object) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(e)}\n\n`); };
     try {
-      await rispondi(dip, d.data, emetti, ctrl.signal);
+      await rispondi({ ...dip, calendarioApple: calendarioApple() }, d.data, emetti, ctrl.signal);
     } catch {
       emetti({ tipo: "delta", testo: "Si è verificato un problema tecnico. Puoi ripetere?" });
     }
     res.end();
   });
 
-  app.post("/api/conferme/:id", (req, res) => {
+  app.post("/api/conferme/:id", async (req, res) => {
     const s = z.object({ scelta: z.union([z.literal("conferma"), z.literal("annulla"), z.number().int().min(0).max(9)]) }).safeParse(req.body);
     if (!s.success) return res.status(400).json({ errore: "Scelta non valida." });
-    res.json(rispondiConferma(db, String(req.params.id), s.data.scelta, config.fusoOrario));
+    res.json(await rispondiConferma(db, String(req.params.id), s.data.scelta, config.fusoOrario, Date.now(), dipPosta));
   });
 
   // ------------------------------------------------------------ memoria («Cosa sa di me»)
@@ -299,6 +329,8 @@ export function creaApp(o: OpzioniApp) {
       costructoToken: elenco[0]?.token ?? "",
       aziende: elenco,
       calendario: !!linkCalendario(),
+      calendarioApple: !!leggiApple(fonteApple),
+      caselleEmail: leggiCaselle({ db, cifratore }).length,
       anthropic: !!config.anthropicApiKey,
       elevenLabs: false,
     };
@@ -404,6 +436,9 @@ export function creaApp(o: OpzioniApp) {
     const n = await inviaATutti(db, o.invia, "Prova di Jarvis", testo.slice(0, 200));
     res.json({ ok: n > 0, messaggio: n ? "Notifica inviata." : "Nessun dispositivo iscritto." });
   });
+
+  // ------------------------------------------------------------ Fase 2: caselle email, Posta, bozze, calendario Apple
+  montaRotteFase2(app, { db, posta: servizioPosta, apple: fonteApple });
 
   app.use("/api", (_req, res) => { res.status(404).json({ errore: "Non trovato." }); });
 
