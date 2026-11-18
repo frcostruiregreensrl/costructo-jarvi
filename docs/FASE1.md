@@ -68,3 +68,12 @@ Ancora da fare dopo questa revisione: provare `src/cervello/anthropic.ts` con il
 3. Revisione indipendente.
 4. Allineare il contratto `/api/assistente/v1` con l'agente che lo costruisce in Costructo (vedi `docs/ARCHITETTURA.md`).
 5. Prova su un iPhone vero di «premi e parla» e del Comando rapido Siri.
+
+## Installazione dei pacchetti (18/11/2026)
+
+Autorizzazione di Luigi del 17/11/2026: «si anche i pacchetti», confermata con «Confermo il push dei rami main e fase1/nucleo su costructo-jarvi e l'installazione di @anthropic-ai/sdk e three in quel repository.»
+
+- Installati in locale (node_modules del solo repository): `@anthropic-ai/sdk` 1.4.0 e `three` 0.187.0, con `package-lock.json`.
+- `src/cervello/anthropic.ts` ora rientra nel controllo dei tipi: `npx tsc --noEmit` senza errori.
+- `npm test`: 57 su 57. `node script/prova-interfaccia.mjs`: 35 su 35, con la modalità Classic che usa la grafica 3D vera (three.js).
+- Il cervello Claude non è ancora stato provato con chiamate vere: manca la chiave API, che si configura su Railway con un'autorizzazione separata.
