@@ -14,6 +14,7 @@ import { mandaTesto } from "./invio.js";
 import { leggiContatto, leggiRisposta, nomeContatto, nuovoId, salvaMessaggio, statoChat, ultimiMessaggi } from "./archivio.js";
 import { mascheraTelefono } from "./telefono.js";
 import { pulisciTestoConfermato, improntaConferma, stessaImpronta, DA_COMPLETARE } from "../sicurezza/testoConfermato.js";
+import { parlaDiPrezzi, togliPrezzi } from "../funzioni/rilevatori.js";
 import { ErroreWhatsapp, InvioIncerto, MAX_TESTO_RISPOSTA, type ContattoWa, type DipendenzeWhatsapp, type RispostaWa } from "./tipi.js";
 
 export const fuoriFinestra = (nome: string) =>
@@ -157,5 +158,7 @@ export async function proponiTesto(dip: DipendenzeWhatsapp, contattoId: string):
     throw new ErroreWhatsapp("Ho raggiunto il tetto di spesa del mese: scrivi tu la risposta qui sotto.", 402);
   }
   if (r.fine === "rifiuto" || !r.testo.trim()) throw new ErroreWhatsapp("Non sono riuscito a preparare la risposta: scrivila tu qui sotto.", 503);
-  return r.testo.trim().slice(0, MAX_TESTO_RISPOSTA);
+  // Fase 3b: mai prezzi o importi nelle risposte proposte (nemmeno se l'AI li scrive): li completa Luigi.
+  const t = r.testo.trim().slice(0, MAX_TESTO_RISPOSTA);
+  return parlaDiPrezzi(t) ? togliPrezzi(t) : t;
 }

@@ -52,12 +52,52 @@ export function corpoTesto(d: Destinatario, testo: string): Record<string, unkno
   };
 }
 
+/** Modello approvato da Meta (parte 2): nome, lingua e testi dei segnaposto {{1}}, {{2}}… del corpo. */
+export interface Modello { nome: string; lingua: string; parametri: string[] }
+
+/** Il corpo standard di un messaggio con modello («template»). */
+export function corpoModello(d: Destinatario, m: Modello): Record<string, unknown> {
+  return {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    ...(d.waId ? { to: d.waId } : { recipient: d.userId }),
+    type: "template",
+    template: {
+      name: m.nome,
+      language: { code: m.lingua },
+      ...(m.parametri.length ? { components: [{ type: "body", parameters: m.parametri.map((t) => ({ type: "text", text: t })) }] } : {}),
+    },
+  };
+}
+
+/** Controllo del modello: nome come quelli di Meta (minuscole, cifre, _), lingua (it, it_IT), al massimo 10 parametri brevi. */
+export function controllaModello(m: Modello): Modello {
+  if (!/^[a-z0-9_]{1,512}$/.test(m.nome)) throw new ErroreWhatsapp("Nome del modello non valido (minuscole, cifre e _).");
+  if (!/^[a-z]{2,3}(_[A-Z]{2})?$/.test(m.lingua)) throw new ErroreWhatsapp("Lingua del modello non valida (per esempio it).");
+  if (m.parametri.length > 10 || m.parametri.some((p) => !p.trim() || p.length > 300 || /[\n\t]| {5,}/.test(p))) throw new ErroreWhatsapp("Parametri del modello non validi.");
+  return m;
+}
+
+/**
+ * Manda un modello approvato da Meta (promemoria degli appuntamenti, parte 2). Va chiamata SOLO dopo la conferma
+ * esplicita di Luigi (con l'impronta di destinatario + modello) e solo con l'interruttore «modelli» acceso.
+ * Mai in automatico.
+ */
+export async function mandaModello(c: CollegamentoWa, d: Destinatario, m: Modello, o: OpzioniInvio = {}): Promise<string> {
+  if (!d.waId && !d.userId) throw new ErroreWhatsapp("Non so a chi mandarlo: manca il numero.");
+  return manda(c, corpoModello(d, controllaModello(m)), o);
+}
+
 /** Manda un testo. Restituisce l'id del messaggio di WhatsApp. Gli errori sono in italiano. */
 export async function mandaTesto(c: CollegamentoWa, d: Destinatario, testo: string, o: OpzioniInvio = {}): Promise<string> {
   const corpo = testo.trim();
   if (!corpo) throw new ErroreWhatsapp("Il messaggio è vuoto.");
   if (corpo.length > MAX_TESTO_RISPOSTA) throw new ErroreWhatsapp("Il messaggio è troppo lungo (al massimo 4000 caratteri).");
   if (!d.waId && !d.userId) throw new ErroreWhatsapp("Non so a chi mandarlo: manca il numero del contatto.");
+  return manda(c, corpoTesto(d, corpo), o);
+}
+
+async function manda(c: CollegamentoWa, corpoJson: Record<string, unknown>, o: OpzioniInvio): Promise<string> {
   // Il token va SOLO all'indirizzo configurato: per un fornitore si ricontrolla ogni volta che il nome non porti alla rete interna.
   if (c.provider === "bsp") await controllaFornitoreInRete(c.baseUrl, o.risolvi);
   const f = o.fetchFn ?? fetch;
@@ -68,7 +108,7 @@ export async function mandaTesto(c: CollegamentoWa, d: Destinatario, testo: stri
     let r: Response;
     try {
       r = await f(indirizzoInvio(c), {
-        method: "POST", headers: intestazioniInvio(c), body: JSON.stringify(corpoTesto(d, corpo)),
+        method: "POST", headers: intestazioniInvio(c), body: JSON.stringify(corpoJson),
         redirect: "error", signal: AbortSignal.timeout(o.timeoutMs ?? 15_000),
       });
     } catch (e) {

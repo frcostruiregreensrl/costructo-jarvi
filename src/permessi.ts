@@ -6,6 +6,9 @@
 // SEMPRE la conferma di Luigi con il pulsante. Mandare email resta impossibile: non esiste nessuno strumento per farlo.
 // Fase 3: una risposta WhatsApp parte SOLO dopo la conferma di Luigi (pulsante o «sì, conferma» alla domanda appena fatta);
 // anche assegnare un contatto a un'azienda chiede sempre la conferma.
+// Fase 3b: mandare una PROPOSTA a Costructo è una scrittura fuori da Jarvis → sempre la conferma di Luigi
+// (con il testo completo di ogni proposta). Preparare la proposta in Jarvis (bozza locale) richiede che Luigi
+// l'abbia chiesta nel turno, sullo stesso oggetto. La ricerca unica legge solo quello che la scheda può vedere.
 import type { Vista, Spazio } from "./memorie.js";
 
 export type Azione =
@@ -22,7 +25,11 @@ export type Azione =
   | "calendario_aziende.leggi"
   | "whatsapp.leggi"
   | "whatsapp.risposta"
-  | "whatsapp.assegna";
+  | "whatsapp.assegna"
+  | "ricerca.leggi"
+  | "proposta.leggi"
+  | "proposta.prepara"
+  | "costructo.proposta";
 
 export const AZIONI_FASE1: ReadonlySet<string> = new Set<Azione>([
   "costructo.leggi", "calendario.leggi", "agenda.leggi", "agenda.aggiungi", "agenda.cancella", "memoria.leggi", "memoria.salva", "interfaccia.numero",
@@ -30,10 +37,12 @@ export const AZIONI_FASE1: ReadonlySet<string> = new Set<Azione>([
   "posta.leggi", "posta.bozza", "calendario_aziende.leggi",
   // Fase 3
   "whatsapp.leggi", "whatsapp.risposta", "whatsapp.assegna",
+  // Fase 3b
+  "ricerca.leggi", "proposta.leggi", "proposta.prepara", "costructo.proposta",
 ]);
-export const SCRITTURE: ReadonlySet<Azione> = new Set<Azione>(["agenda.aggiungi", "agenda.cancella", "memoria.salva", "posta.bozza", "whatsapp.risposta", "whatsapp.assegna"]);
+export const SCRITTURE: ReadonlySet<Azione> = new Set<Azione>(["agenda.aggiungi", "agenda.cancella", "memoria.salva", "posta.bozza", "whatsapp.risposta", "whatsapp.assegna", "proposta.prepara", "costructo.proposta"]);
 /** Scritture fuori da Jarvis: chiedono SEMPRE la conferma di Luigi (pulsante), anche se l'ha chiesto lui. */
-export const SEMPRE_CONFERMA: ReadonlySet<Azione> = new Set<Azione>(["posta.bozza", "whatsapp.risposta", "whatsapp.assegna"]);
+export const SEMPRE_CONFERMA: ReadonlySet<Azione> = new Set<Azione>(["posta.bozza", "whatsapp.risposta", "whatsapp.assegna", "costructo.proposta"]);
 
 export interface ContestoPermesso {
   vista: Vista;
@@ -69,6 +78,8 @@ export function controllaPermesso(azione: string, c: ContestoPermesso): Decision
   const a = azione as Azione;
   if (a === "whatsapp.risposta") return { esito: "conferma", motivo: "Messaggio WhatsApp: parte solo dopo la conferma di Luigi." };
   if (a === "whatsapp.assegna") return { esito: "conferma", motivo: "Azienda di un contatto WhatsApp: decide Luigi." };
+  if (a === "costructo.proposta") return { esito: "conferma", motivo: "Proposta per Costructo: parte solo dopo la conferma di Luigi." };
+  if (a === "proposta.prepara" && c.vista === "privato") return { esito: "negato", motivo: "Nella scheda Privato non preparo proposte per Costructo." };
   if (SEMPRE_CONFERMA.has(a)) return { esito: "conferma", motivo: "Scrittura nella casella di posta: serve sempre la conferma di Luigi." };
   if (!haIntenzione(a, c.messaggioLuigi)) {
     return { esito: "conferma", motivo: "Luigi non l'ha chiesto in questo messaggio: serve la sua conferma." };
@@ -88,6 +99,7 @@ const INTENZIONI: Partial<Record<Azione, RegExp>> = {
   "agenda.aggiungi": /\b(segna(mi|re|lo|la)?|aggiungi(mi)?|aggiunge?re|metti(mi)?|fiss[ai](mi)?|prenota(mi)?|crea|inserisci|programma|ricordami|promemoria|appuntamento alle)\b/i,
   "agenda.cancella": /\b(cancella(lo|la|re)?|elimina(lo|la|re)?|togli(lo|la|ere)?|rimuovi(lo|la)?|disdici|annulla(lo|la|re)?)\b/i,
   "memoria.salva": /\b(ricorda(ti|re)?|memorizza|salva|annota|appunta|segnati|tieni a mente|sappi che|non dimenticare)\b/i,
+  "proposta.prepara": /\b(manda(gli|le|re)?|mandare|invia(gli|le|re)?|spedisci|spedire|prepara(mi|re)?|proponi|gira(gli|le)?|fai avere)\b/i,
 };
 
 // «ricordami cosa ho domani», «ricordami quando...»: è una domanda, non una richiesta di scrivere.

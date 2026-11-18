@@ -5,6 +5,11 @@ import { dirname } from "node:path";
 
 export type Db = Database.Database;
 
+/** Testo cercabile di un messaggio WhatsApp: testo, didascalia e nome del file (Fase 3b, ricerca unica). */
+const TESTO_WA = (r: string) => `${r}.testo || ' ' || CASE WHEN json_valid(${r}.media) THEN coalesce(json_extract(${r}.media, '$.didascalia'), '') || ' ' || coalesce(json_extract(${r}.media, '$.nomeFile'), '') ELSE '' END`;
+/** Testo cercabile di una mail: oggetto, mittente, testo breve e riassunto. */
+const TESTO_POSTA = (r: string) => `${r}.oggetto || ' ' || ${r}.da_nome || ' ' || ${r}.da_indirizzo || ' ' || ${r}.estratto || ' ' || ${r}.riassunto`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS utente (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -230,6 +235,125 @@ CREATE TABLE IF NOT EXISTS wa_domande (
   risposta TEXT NOT NULL DEFAULT '',
   notificata INTEGER NOT NULL DEFAULT 0
 );
+
+-- Fase 3b: le 20 funzioni WhatsApp. Jarvis NON scrive mai record definitivi in Costructo: prepara PROPOSTE
+-- (bozze innocue) che Luigi conferma qui e poi approva in Costructo. Tutto si cancella dopo 30 giorni,
+-- tranne le scelte di Luigi (operaio di un contatto, chat escluse).
+CREATE TABLE IF NOT EXISTS proposte (
+  id TEXT PRIMARY KEY,
+  tipo TEXT NOT NULL,                       -- ore, foto, rinnovo_documento, … oppure agenda_privata (resta in Jarvis)
+  azienda_id TEXT NOT NULL,                 -- id dell'azienda in Jarvis (un token) oppure 'privato'
+  chiave_doppione TEXT NOT NULL UNIQUE,     -- deterministica (es. wa:<id del messaggio>:ore): la stessa proposta non nasce due volte
+  origine TEXT NOT NULL CHECK (origine IN ('whatsapp','email','jarvis')),
+  rif_esterno TEXT NOT NULL DEFAULT '',
+  titolo TEXT NOT NULL,
+  dati TEXT NOT NULL DEFAULT '{}',          -- JSON (controllato con zod prima dell'invio)
+  allegati TEXT NOT NULL DEFAULT '[]',      -- JSON: solo i riferimenti agli allegati salvati (wa_allegati)
+  avvisi TEXT NOT NULL DEFAULT '[]',        -- note solo per Luigi (differenze, campi mancanti): non vanno a Costructo
+  contatto_id TEXT NOT NULL DEFAULT '',
+  messaggio_id TEXT NOT NULL DEFAULT '',
+  stato TEXT NOT NULL CHECK (stato IN ('da_confermare','in_invio','inviata','gia_presente','attesa_costructo','errore','scartata')),
+  esito TEXT NOT NULL DEFAULT '',
+  id_costructo TEXT NOT NULL DEFAULT '',
+  stato_costructo TEXT NOT NULL DEFAULT '', -- in_attesa | accettata | scartata | superata
+  motivo_costructo TEXT NOT NULL DEFAULT '',
+  deciso_il TEXT NOT NULL DEFAULT '',
+  automatica INTEGER NOT NULL DEFAULT 0,
+  creata INTEGER NOT NULL,
+  aggiornata INTEGER NOT NULL,
+  inviata INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS proposte_stato ON proposte(stato, creata);
+-- Foto e PDF scaricati da WhatsApp (solo con l'interruttore acceso, solo per i contatti delle aziende). Mai l'audio.
+CREATE TABLE IF NOT EXISTS wa_allegati (
+  id TEXT PRIMARY KEY,
+  messaggio_id TEXT NOT NULL UNIQUE,
+  contatto_id TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  nome TEXT NOT NULL,
+  dimensione INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  dati BLOB NOT NULL,
+  scaricato INTEGER NOT NULL
+);
+-- Analisi dei messaggi per le funzioni (una riga per messaggio: si analizza una volta sola).
+CREATE TABLE IF NOT EXISTS wa_analisi (
+  messaggio_id TEXT PRIMARY KEY,
+  stato TEXT NOT NULL,                      -- fatta | attesa (contatto da assegnare, operaio da chiarire) | scaduta
+  azienda_id TEXT NOT NULL DEFAULT '',
+  cantiere_id TEXT NOT NULL DEFAULT '',
+  cantiere_nome TEXT NOT NULL DEFAULT '',
+  esito TEXT NOT NULL DEFAULT '{}',
+  quando INTEGER NOT NULL
+);
+-- Stato degli allegati e dei vocali (scaricato, trascritto, spento, errore). L'audio non si salva mai: della trascrizione resta solo il testo, nel messaggio.
+CREATE TABLE IF NOT EXISTS wa_media_stato (
+  messaggio_id TEXT PRIMARY KEY,
+  stato TEXT NOT NULL,                      -- trascritto | spenta | scaricato | errore | tetto | formato | troppo_grande
+  fornitore TEXT NOT NULL DEFAULT '',
+  secondi REAL NOT NULL DEFAULT 0,
+  quando INTEGER NOT NULL
+);
+-- Chi è un contatto WhatsApp tra gli operai di Costructo (in Costructo gli operai non hanno il telefono).
+-- Scelta di Luigi: si ricorda. operaio_id '' = «non è un operaio».
+CREATE TABLE IF NOT EXISTS wa_operai (
+  contatto_id TEXT PRIMARY KEY,
+  azienda_id TEXT NOT NULL,
+  operaio_id TEXT NOT NULL,
+  nome TEXT NOT NULL DEFAULT '',
+  scelto INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS wa_domande_operaio (
+  id TEXT PRIMARY KEY,
+  contatto_id TEXT NOT NULL,
+  azienda_id TEXT NOT NULL,
+  creata INTEGER NOT NULL,
+  stato TEXT NOT NULL CHECK (stato IN ('aperta','risposta'))
+);
+-- Promesse scritte da Luigi in chat («ti mando il preventivo domani»).
+CREATE TABLE IF NOT EXISTS promesse (
+  id TEXT PRIMARY KEY,
+  contatto_id TEXT NOT NULL,
+  messaggio_id TEXT NOT NULL UNIQUE,
+  cosa TEXT NOT NULL,
+  scadenza INTEGER NOT NULL,
+  stato TEXT NOT NULL CHECK (stato IN ('aperta','mantenuta','chiusa')),
+  creata INTEGER NOT NULL
+);
+-- Scontrini: solo in Jarvis (Prima Nota esclusa finché Luigi non decide).
+CREATE TABLE IF NOT EXISTS scontrini (
+  id TEXT PRIMARY KEY,
+  messaggio_id TEXT NOT NULL UNIQUE,
+  contatto_id TEXT NOT NULL,
+  spazio TEXT NOT NULL,
+  descrizione TEXT NOT NULL DEFAULT '',
+  allegato_id TEXT NOT NULL DEFAULT '',
+  creato INTEGER NOT NULL
+);
+-- Ricerca unica (FTS5) sui messaggi e sulle mail salvati. Le righe seguono i messaggi: quando un messaggio si
+-- cancella (30 giorni), sparisce anche dall'indice.
+CREATE VIRTUAL TABLE IF NOT EXISTS cerca_wa USING fts5(testo, rif UNINDEXED, tokenize = 'unicode61 remove_diacritics 2');
+CREATE VIRTUAL TABLE IF NOT EXISTS cerca_posta USING fts5(testo, rif UNINDEXED, tokenize = 'unicode61 remove_diacritics 2');
+CREATE TRIGGER IF NOT EXISTS cerca_wa_nuovo AFTER INSERT ON wa_messaggi BEGIN
+  INSERT INTO cerca_wa (testo, rif) VALUES (${TESTO_WA("new")}, new.id);
+END;
+CREATE TRIGGER IF NOT EXISTS cerca_wa_cambio AFTER UPDATE OF testo, media ON wa_messaggi BEGIN
+  DELETE FROM cerca_wa WHERE rif = old.id;
+  INSERT INTO cerca_wa (testo, rif) VALUES (${TESTO_WA("new")}, new.id);
+END;
+CREATE TRIGGER IF NOT EXISTS cerca_wa_via AFTER DELETE ON wa_messaggi BEGIN
+  DELETE FROM cerca_wa WHERE rif = old.id;
+END;
+CREATE TRIGGER IF NOT EXISTS cerca_posta_nuovo AFTER INSERT ON posta_messaggi BEGIN
+  INSERT INTO cerca_posta (testo, rif) VALUES (${TESTO_POSTA("new")}, new.id);
+END;
+CREATE TRIGGER IF NOT EXISTS cerca_posta_cambio AFTER UPDATE OF riassunto, estratto ON posta_messaggi BEGIN
+  DELETE FROM cerca_posta WHERE rif = old.id;
+  INSERT INTO cerca_posta (testo, rif) VALUES (${TESTO_POSTA("new")}, new.id);
+END;
+CREATE TRIGGER IF NOT EXISTS cerca_posta_via AFTER DELETE ON posta_messaggi BEGIN
+  DELETE FROM cerca_posta WHERE rif = old.id;
+END;
 `;
 
 export function apriDb(file: string): Db {
@@ -238,5 +362,8 @@ export function apriDb(file: string): Db {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA);
+  // Indice di ricerca per i messaggi e le mail salvati prima della Fase 3b (una volta sola: poi ci pensano i trigger).
+  db.exec(`INSERT INTO cerca_wa (testo, rif) SELECT ${TESTO_WA("m")}, m.id FROM wa_messaggi m WHERE m.id NOT IN (SELECT rif FROM cerca_wa)`);
+  db.exec(`INSERT INTO cerca_posta (testo, rif) SELECT ${TESTO_POSTA("m")}, m.id FROM posta_messaggi m WHERE m.id NOT IN (SELECT rif FROM cerca_posta)`);
   return db;
 }

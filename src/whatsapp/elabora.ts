@@ -8,6 +8,7 @@ import { SchemaValore, type MessaggioWebhook, type StatoWebhook, type ValoreWebh
 import { salvaContatto, salvaMessaggio } from "./archivio.js";
 import { normalizzaTelefono, pulisciNome, testoBreve, mascheraTelefono } from "./telefono.js";
 import type { MediaWa } from "./tipi.js";
+import { POSIZIONE_OPERAIO } from "../funzioni/operai.js";
 
 export interface EsitoElaborazione { nuovi: number; doppi: number; storico: number; eco: number; stati: number; contatti: number; ignorati: number }
 
@@ -38,7 +39,10 @@ export function contenuto(m: MessaggioWebhook): { tipo: string; testo: string; m
     case "location": {
       const l = m.location ?? {};
       const dove = [l.name, l.address].filter(Boolean).join(", ");
-      return { tipo, testo: testoBreve(`Posizione: ${dove || `${l.latitude ?? "?"}, ${l.longitude ?? "?"}`}`) };
+      // Fase 3b: le coordinate servono a trovare il cantiere più vicino (mai per gli operai: vedi salvaUno).
+      const coordinate = typeof l.latitude === "number" && typeof l.longitude === "number" && Math.abs(l.latitude) <= 90 && Math.abs(l.longitude) <= 180
+        ? { lat: l.latitude, lon: l.longitude } : null;
+      return { tipo, testo: testoBreve(`Posizione: ${dove || `${l.latitude ?? "?"}, ${l.longitude ?? "?"}`}`), ...(coordinate ? { media: { ...coordinate, ...(dove ? { didascalia: testoBreve(dove, 300) } : {}) } } : {}) };
     }
     case "contacts": {
       // Dei contatti condivisi si tiene solo il nome (i numeri di altre persone non servono a Jarvis).
@@ -105,7 +109,11 @@ function salvaUno(c: Contesto, m: MessaggioWebhook, opz: { direzione: "in" | "ec
   const nomeProfilo = waId ? c.nomi.get(waId) : userId ? c.nomi.get(`u:${userId}`) : undefined;
   const contatto = salvaContatto(c.db, gruppoId ? { gruppoId } : { waId, userId, nomeProfilo }, c.ora);
   if (!contatto) { c.esito.ignorati++; return; }
-  const x = contenuto(m);
+  let x = contenuto(m);
+  // GDPR (Fase 3b): la posizione di un operaio non si salva mai (né le coordinate né l'indirizzo).
+  if (x.tipo === "location" && !gruppoId && (c.db.prepare("SELECT 1 FROM wa_operai WHERE contatto_id = ? AND operaio_id <> ''").get(contatto.id))) {
+    x = { tipo: "location", testo: POSIZIONE_OPERAIO };
+  }
   // Nei gruppi si tiene il nome di chi scrive davanti al testo (il «contatto» è il gruppo).
   const testo = gruppoId && opz.direzione === "in" ? testoBreve(`${nomeProfilo || (waId ? `Numero ${mascheraTelefono(waId)}` : "Qualcuno")}: ${x.testo}`) : x.testo;
   // Classificazione solo per i messaggi ricevuti dal vivo, fuori dai gruppi, con un contenuto (non reazioni).

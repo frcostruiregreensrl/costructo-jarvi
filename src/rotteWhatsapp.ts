@@ -39,7 +39,16 @@ export function montaRotteWhatsapp(app: Express, o: OpzioniRotteWa): void {
       id: m.id, direzione: m.direzione, tipo: m.tipo, quando: m.quando, testo: m.testo, storico: !!m.storico, automatico: !!m.automatico,
       allegato: x.tipo ? { tipo: x.tipo, mime: x.mime ?? "", nomeFile: x.nomeFile ?? "", didascalia: x.didascalia ?? "" } : null,
       statoInvio: m.stato_invio, erroreInvio: m.errore_invio, riassunto: m.riassunto, urgente: !!m.urgente, motivo: m.motivo, tocca: !!m.tocca, stato: m.stato,
+      // Fase 3b: cosa ha visto Jarvis (cantiere, posizione vicina) e le proposte nate dal messaggio.
+      ...funzioniMessaggio(m.id),
     };
+  };
+  const funzioniMessaggio = (id: string) => {
+    const a = db.prepare("SELECT cantiere_nome, esito FROM wa_analisi WHERE messaggio_id = ?").get(id) as { cantiere_nome: string; esito: string } | undefined;
+    const proposte = (db.prepare("SELECT id, tipo, stato FROM proposte WHERE messaggio_id = ? AND stato <> 'scartata'").all(id) as Array<{ id: string; tipo: string; stato: string }>);
+    let esito: Record<string, unknown> = {};
+    try { esito = a ? JSON.parse(a.esito) : {}; } catch { /* */ }
+    return { cantiere: a?.cantiere_nome ?? "", vicino: typeof esito.vicino === "string" ? { cantiere: esito.vicino, metri: Number(esito.metri) || 0 } : null, proposte };
   };
   // «impronta»: contatto + testo esatto. Il browser la rimanda con la conferma: parte solo il testo mostrato.
   const vistaRisposta = (r: RispostaWa) => ({ id: r.id, tipo: r.tipo, testo: r.testo, creata: r.creata, stato: r.stato, esito: r.esito, impronta: improntaRisposta(r) });
@@ -97,6 +106,7 @@ export function montaRotteWhatsapp(app: Express, o: OpzioniRotteWa): void {
     const s = statoChat(db, c.id);
     res.json({
       contatto: vistaContatto(c), senzaRisposta: s.senzaRisposta, dentroFinestra: s.dentroFinestra && !c.gruppo,
+      esclusa: leggiImpostazioni(db).chatPrivateEscluse.includes(c.id),
       messaggi: ultimiMessaggi(db, c.id, 40).map(vistaMessaggio), risposte: risposteAperte(db, c.id).map(vistaRisposta),
     });
   });

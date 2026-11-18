@@ -2,7 +2,7 @@
 // (POST /{versione}/{phone_number_id}/messages oppure {base}/messages) e risponde con un id di messaggio.
 // Nessuna rete vera: un fetch finto gira le richieste per graph.facebook.com e per il fornitore a questo server locale.
 import { createServer, type Server } from "node:http";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 
 export interface RichiestaFinta { metodo: string; host: string; percorso: string; intestazioni: Record<string, string>; corpo: Record<string, unknown> }
@@ -13,6 +13,8 @@ export interface MetaFinto {
   richieste: RichiestaFinta[];
   /** Risposte in coda (una per richiesta); finite queste, risponde 200 con un id nuovo. */
   prossime: Risposta[];
+  /** Fase 3b: allegati finti (id del media → contenuto). GET /{versione}/{id} dà l'indirizzo, GET dell'indirizzo dà i byte. */
+  media: Record<string, { mime: string; dati: Buffer; sha256?: string }>;
   /** fetch da dare a Jarvis: le richieste https verso Meta o il fornitore arrivano qui. */
   fetch: typeof fetch;
   chiudi: () => Promise<void>;
@@ -20,7 +22,7 @@ export interface MetaFinto {
 
 export async function avviaMetaFinto(): Promise<MetaFinto> {
   let n = 0;
-  const m: MetaFinto = { url: "", richieste: [], prossime: [], fetch: fetch, chiudi: async () => {} };
+  const m: MetaFinto = { url: "", richieste: [], prossime: [], media: {}, fetch: fetch, chiudi: async () => {} };
   const server: Server = createServer((req, res) => {
     let grezzo = "";
     req.on("data", (d) => { grezzo += d; });
@@ -31,6 +33,19 @@ export async function avviaMetaFinto(): Promise<MetaFinto> {
         metodo: req.method || "", host: String(req.headers["x-host-originale"] || ""), percorso: req.url || "",
         intestazioni: Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k, String(v)])), corpo,
       });
+      if (req.method === "GET") {
+        const u = new URL(req.url || "/", "http://x");
+        const file = /^\/whatsapp_business\/attachments\/$/.test(u.pathname) ? m.media[u.searchParams.get("mid") ?? ""] : undefined;
+        if (file) { res.writeHead(200, { "Content-Type": file.mime }).end(file.dati); return; }
+        const id = u.pathname.split("/").filter(Boolean).at(-1) ?? "";
+        const x = m.media[id];
+        if (!x) { res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: { code: 100 } })); return; }
+        res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({
+          messaging_product: "whatsapp", url: `https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=${encodeURIComponent(id)}&ext=1`,
+          mime_type: x.mime, sha256: x.sha256 ?? createHash("sha256").update(x.dati).digest("hex"), file_size: x.dati.length, id,
+        }));
+        return;
+      }
       const r = m.prossime.shift() ?? { corpo: { messaging_product: "whatsapp", contacts: [{ input: corpo.to, wa_id: corpo.to }], messages: [{ id: `wamid.finto.${++n}` }] } };
       res.writeHead(r.stato ?? 200, { "Content-Type": "application/json" }).end(JSON.stringify(r.corpo ?? {}));
     });
