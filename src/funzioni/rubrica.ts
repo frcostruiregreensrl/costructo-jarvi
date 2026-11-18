@@ -36,7 +36,7 @@ export async function rubrica(db: Db, aziende: AziendaWa[], collegate: AziendaCo
     for (const c of controparti) { const n = telefonoDi(c); if (n) numeri.set(n, String(c.nome || c.ragioneSociale || c.id)); }
     let ricerche = 0;
     for (const c of contatti) {
-      const op = operaioDelContatto(db, c.id);
+      const op = operaioDelContatto(db, c.id, az.id);
       const proposta = (db.prepare("SELECT id FROM proposte WHERE tipo = 'contatto' AND contatto_id = ? AND stato NOT IN ('scartata') ORDER BY creata DESC LIMIT 1").get(c.id) as { id: string } | undefined)?.id;
       const voce: VoceRubrica = { id: c.id, nome: nomeContatto(c), numero: mascheraTelefono(c.wa_id), stato: "sconosciuto", suggerite: [], ...(proposta ? { proposta } : {}) };
       let controparte = numeri.get(c.wa_id);

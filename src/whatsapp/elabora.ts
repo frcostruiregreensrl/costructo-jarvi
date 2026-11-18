@@ -8,7 +8,7 @@ import { SchemaValore, type MessaggioWebhook, type StatoWebhook, type ValoreWebh
 import { salvaContatto, salvaMessaggio } from "./archivio.js";
 import { normalizzaTelefono, pulisciNome, testoBreve, mascheraTelefono } from "./telefono.js";
 import type { MediaWa } from "./tipi.js";
-import { POSIZIONE_OPERAIO } from "../funzioni/operai.js";
+import { POSIZIONE_OPERAIO, POSIZIONE_NON_SALVATA, eOperaio, nonOperaio } from "../funzioni/operai.js";
 
 export interface EsitoElaborazione { nuovi: number; doppi: number; storico: number; eco: number; stati: number; contatti: number; ignorati: number }
 
@@ -82,10 +82,31 @@ export function direzioneStorico(m: MessaggioWebhook, numeroAzienda: string, waI
 
 interface Contesto { db: Db; ora: number; numeroAzienda: string; nomi: Map<string, string>; esito: EsitoElaborazione }
 
+/**
+ * Fase 3b: chi ha scritto ha cancellato il messaggio → via anche quello che Jarvis ne aveva ricavato e non è ancora partito:
+ * foto e PDF scaricati, proposte (anche quelle che usavano quell'allegato), scontrini, promesse.
+ * Le proposte già mandate a Costructo restano là (Luigi le scarta in Costructo): qui si segnano.
+ */
+export function cancellaDerivati(db: Db, wamid: string): void {
+  const m = db.prepare("SELECT id FROM wa_messaggi WHERE wamid = ?").get(wamid) as { id: string } | undefined;
+  if (!m) return;
+  const allegato = db.prepare("SELECT id FROM wa_allegati WHERE messaggio_id = ?").get(m.id) as { id: string } | undefined;
+  const cerca = allegato ? `%"${allegato.id}"%` : "\u0000";
+  db.prepare(`UPDATE proposte SET stato = 'scartata', esito = 'Scartata: il messaggio è stato cancellato da chi l''aveva mandato.'
+      WHERE (messaggio_id = ? OR allegati LIKE ?) AND stato IN ('da_confermare','errore','attesa_costructo')`).run(m.id, cerca);
+  db.prepare(`UPDATE proposte SET esito = 'Attenzione: il messaggio da cui è nata è stato cancellato da chi l''aveva mandato. Controllala in Costructo.'
+      WHERE (messaggio_id = ? OR allegati LIKE ?) AND stato IN ('inviata','in_invio')`).run(m.id, cerca);
+  db.prepare("DELETE FROM wa_allegati WHERE messaggio_id = ?").run(m.id);
+  db.prepare("DELETE FROM scontrini WHERE messaggio_id = ?").run(m.id);
+  db.prepare("DELETE FROM promesse WHERE messaggio_id = ?").run(m.id);
+  db.prepare("DELETE FROM wa_analisi WHERE messaggio_id = ?").run(m.id);
+}
+
 /** Applica una modifica o una cancellazione (edit, revoke) al messaggio originale, se c'è. */
 function modificaORevoca(c: Contesto, m: MessaggioWebhook): boolean {
   if (m.type === "revoke" && m.revoke?.original_message_id) {
     c.db.prepare("UPDATE wa_messaggi SET revocato = 1, testo = 'Messaggio cancellato', media = '{}' WHERE wamid = ?").run(m.revoke.original_message_id);
+    cancellaDerivati(c.db, m.revoke.original_message_id);
     return true;
   }
   if (m.type === "edit" && m.edit?.original_message_id) {
@@ -110,9 +131,12 @@ function salvaUno(c: Contesto, m: MessaggioWebhook, opz: { direzione: "in" | "ec
   const contatto = salvaContatto(c.db, gruppoId ? { gruppoId } : { waId, userId, nomeProfilo }, c.ora);
   if (!contatto) { c.esito.ignorati++; return; }
   let x = contenuto(m);
-  // GDPR (Fase 3b): la posizione di un operaio non si salva mai (né le coordinate né l'indirizzo).
-  if (x.tipo === "location" && !gruppoId && (c.db.prepare("SELECT 1 FROM wa_operai WHERE contatto_id = ? AND operaio_id <> ''").get(contatto.id))) {
-    x = { tipo: "location", testo: POSIZIONE_OPERAIO };
+  // GDPR (Fase 3b): una posizione si salva SOLO per i contatti che sicuramente non sono operai (clienti e fornitori trovati in
+  // Costructo, o «non è un operaio» detto da Luigi). Mai per gli operai, mai nei gruppi, mai per i contatti non ancora chiariti.
+  if (x.tipo === "location") {
+    if (gruppoId) x = { tipo: "location", testo: "Posizione condivisa nel gruppo (non salvata)" };
+    else if (eOperaio(c.db, contatto.id)) x = { tipo: "location", testo: POSIZIONE_OPERAIO };
+    else if (!nonOperaio(c.db, contatto)) x = { tipo: "location", testo: POSIZIONE_NON_SALVATA };
   }
   // Nei gruppi si tiene il nome di chi scrive davanti al testo (il «contatto» è il gruppo).
   const testo = gruppoId && opz.direzione === "in" ? testoBreve(`${nomeProfilo || (waId ? `Numero ${mascheraTelefono(waId)}` : "Qualcuno")}: ${x.testo}`) : x.testo;

@@ -98,3 +98,26 @@ export function telefonoDi(c: Pick<Controparte, "telefono">): string | null {
   for (const pezzo of String(c.telefono ?? "").split(/[,;/]|\s{2,}/)) { const n = normalizzaTelefono(pezzo); if (n) return n; }
   return null;
 }
+
+// ---------------------------------------------------------------- documenti: di chi sono
+const GENERICHE_DITTA = new Set(["srl", "spa", "snc", "sas", "srls", "ditta", "impresa", "societa", "edile", "edilizia", "costruzioni", "di", "del", "della", "dei", "e"]);
+/** Parole caratteristiche di un nome di ditta (per il confronto a parole intere). */
+export const paroleDitta = (t: string) => normalizza(t).split(/[^a-z0-9]+/).filter((p) => p.length >= 2 && !GENERICHE_DITTA.has(p));
+
+/** Vero se TUTTE le parole caratteristiche di `nome` compaiono, a parole intere, in `testo`. */
+export function tutteLeParole(nome: string, testo: string): boolean {
+  const p = paroleDitta(nome);
+  const q = new Set(normalizza(testo).split(/[^a-z0-9]+/));
+  return p.length > 0 && p.every((x) => q.has(x));
+}
+
+/**
+ * Il documento è dell'azienda stessa (non di un subappaltatore o di altri)? Prima il campo `di_chi` di Costructo
+ * («azienda» = dell'impresa), poi ditta/intestatario/azienda confrontati con il nome dell'azienda.
+ */
+export function documentoDellAzienda(v: VoceDocumento, nomeAzienda: string): boolean {
+  const diChi = normalizza(v.di_chi ?? "");
+  if (diChi) return /^(azienda|impresa|propri\w*|nostr\w*|interno)$/.test(diChi);
+  const chi = String(v.ditta || v.intestatario || v.azienda || "");
+  return !chi || tutteLeParole(chi, nomeAzienda) || tutteLeParole(nomeAzienda, chi);
+}

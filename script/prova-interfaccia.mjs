@@ -147,7 +147,7 @@ try {
         await pagina.waitForSelector("#propGruppi .proposta");
         const gruppiProp = await pagina.locator("#propGruppi .gruppo-proposte h2").allTextContents();
         controlla("Proposte: gruppi «Da confermare» e «Mandate»", gruppiProp.some((g) => g.startsWith("Da confermare (5)")) && gruppiProp.some((g) => g.startsWith("Mandate (1)")), gruppiProp.join(" | "));
-        controlla("Proposte: testo completo visibile", /Proposta per Costructo · Impresa Prova \(finta\)\nTipo: Ore \(rapportino\)/.test(await pagina.locator(".proposta .testo-completo").first().textContent()));
+        controlla("Proposte: testo completo visibile", /Proposta per Costructo · Impresa Prova \(finta\)\nTipo: Ore \(rapportino\)/.test(await pagina.locator(".proposta", { hasText: "Ore di Mario Rossi" }).locator(".testo-completo").textContent()));
         const durc = pagina.locator(".proposta", { hasText: "DURC di Idraulica Prova" });
         controlla("Proposte: incompleta non si manda", await durc.locator("button", { hasText: "Manda a Costructo" }).isDisabled() && /Da completare prima di confermare: Nuova scadenza/.test(await durc.textContent()));
         controlla("Proposte: «Chi è questo contatto: operaio…?» con i pulsanti", (await pagina.locator("#propDomande .domanda-operaio button").count()) === 3);

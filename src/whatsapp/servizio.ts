@@ -19,7 +19,7 @@ import { preparaRisposta } from "./risposte.js";
 import { leggiContatto, mediaDi, nomeContatto, nomeSpazio, statoChat } from "./archivio.js";
 import { leggiCollegamento } from "./collegamento.js";
 import { giroVocali, giroAllegati, giroFunzioni, type EsitoFunzioni } from "../funzioni/analisi.js";
-import { mandaAutomatiche, aggiornaStatiProposte } from "../proposte/invio.js";
+import { mandaAutomatiche, aggiornaStatiProposte, recuperaBloccate } from "../proposte/invio.js";
 import { PAUSA_NOTIFICHE_MS, PRIVATO, RAGGRUPPA_MS, type ContattoWa, type DipendenzeWhatsapp, type MessaggioWa } from "./tipi.js";
 
 export const OGNI_MS = 60_000;
@@ -128,6 +128,7 @@ export function creaServizioWhatsapp(dip: DipendenzeWhatsapp) {
     await passo("funzioni.analisi", async () => { e.funzioni = await giroFunzioni(dip); });
     await passo("proposta.invio", async () => { e.automatiche = await mandaAutomatiche(dip); });
     const ora = dip.ora?.() ?? Date.now();
+    await passo("proposta.invio", async () => { await recuperaBloccate(dip); });
     if (ora - ultimiStati >= OGNI_STATI_MS) { ultimiStati = ora; await passo("proposta.stato", async () => { await aggiornaStatiProposte(dip); }); }
     await passo("whatsapp.risposta", () => { e.proposte = proponiRichiesteDocumento(dip); });
     await passo("whatsapp.conferma_automatica", async () => { e.conferme = await mandaConfermeWa(dip); });

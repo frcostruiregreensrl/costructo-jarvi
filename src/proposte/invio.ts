@@ -14,6 +14,8 @@ import { aggiungiImpegno, descriviImpegno } from "../agenda.js";
 import { leggiImpostazioni } from "../impostazioni.js";
 import { registra } from "../registro.js";
 import { stessaImpronta } from "../sicurezza/testoConfermato.js";
+import { dataIso } from "../tempo.js";
+import { contenutoCoerente } from "./firme.js";
 import { allegatiDi, datiDi, improntaProposta, leggiProposta, validaDati, type NomeAzienda } from "./archivio.js";
 import { ALLEGATI_RICHIESTI, GIA_PRESENTE, IN_ATTESA_COSTRUCTO, MAX_BYTE_ALLEGATO, MIME_ALLEGATI, NOMI_TIPI, PRIVATO, vaACostructo, type RigaProposta } from "./tipi.js";
 
@@ -44,6 +46,7 @@ function caricaAllegati(db: Db, p: RigaProposta): Array<{ nome: string; mime: st
     if (!(MIME_ALLEGATI as readonly string[]).includes(r.mime)) throw new Error(`Formato non ammesso per «${a.nome}».`);
     if (r.dati.length > MAX_BYTE_ALLEGATO) throw new Error(`«${a.nome}» è più grande di 10 MB.`);
     if (createHash("sha256").update(r.dati).digest("hex") !== r.sha256 || r.sha256 !== a.sha256) throw new Error(`L'allegato «${a.nome}» è cambiato: non lo mando.`);
+    if (!contenutoCoerente(r.dati, r.mime)) throw new Error(`«${a.nome}» non è davvero un file ${r.mime}: non lo mando.`);
     return { nome: a.nome, mime: r.mime, base64: r.dati.toString("base64") };
   });
 }
@@ -65,7 +68,7 @@ export async function mandaProposta(dip: DipendenzeProposte, id: string, impront
     registra(db, "proposta.invio", "negato", "sistema", { proposta: id, motivo: "contenuto diverso da quello confermato" });
     return no("La proposta è cambiata dopo la conferma: non ho mandato niente. Ricontrollala e conferma di nuovo.");
   }
-  const v = validaDati(p.tipo, datiDi(p));
+  const v = validaDati(p.tipo, datiDi(p), dataIso(ora, dip.fuso));
   if (!v.ok) return no(`Mancano dei dati: ${v.mancano.join(", ")}. Completali prima di confermare.`);
   const richiesti = ALLEGATI_RICHIESTI[p.tipo];
   const allegati = allegatiDi(p);
@@ -96,6 +99,20 @@ export async function mandaProposta(dip: DipendenzeProposte, id: string, impront
   // ---- Costructo
   const azienda = dip.aziendeCostructo().find((a) => a.id === p.azienda_id && a.client.configurato);
   if (!azienda) { segna("errore", "Azienda non collegata a Costructo."); return no("Questa azienda non è collegata a Costructo: non ho mandato niente."); }
+  // Ore: l'operaio deve essere di QUESTA azienda in Costructo (si ricontrolla adesso, con /v1/operai di questa azienda).
+  if (p.tipo === "ore") {
+    const operaioId = String((v.dati as { operaioId: string }).operaioId);
+    let lista: Awaited<ReturnType<typeof azienda.client.operai>>;
+    try { lista = await azienda.client.operai(); } catch {
+      segna("errore", "Non riesco a controllare l'operaio in Costructo: riprova.");
+      return no(`${azienda.nome}: non riesco a controllare l'operaio in Costructo. Non ho mandato niente: riprova più tardi.`);
+    }
+    if (!lista.some((o) => String(o.id) === operaioId && o.attivo !== false)) {
+      segna("errore", `L'operaio non è tra gli operai attivi di ${azienda.nome} in Costructo.`);
+      registra(db, "proposta.invio", "negato", "sistema", { proposta: id, motivo: "operaio non di questa azienda" });
+      return no(`L'operaio di questa proposta non è tra gli operai attivi di ${azienda.nome} in Costructo: non ho mandato niente. Correggila.`);
+    }
+  }
   let corpo: CorpoProposta;
   try {
     const a = caricaAllegati(db, p);
@@ -144,9 +161,39 @@ export async function mandaAutomatiche(dip: DipendenzeProposte): Promise<number>
       AND tipo IN (${tipi.map(() => "?").join(",")}) ORDER BY creata LIMIT 20`).all(PRIVATO, ora - 864e5, ...tipi) as RigaProposta[];
   let n = 0;
   for (const p of candidate) {
-    if (!validaDati(p.tipo, datiDi(p)).ok) continue;
+    if (!validaDati(p.tipo, datiDi(p), dataIso(ora, dip.fuso)).ok) continue;
     const e = await mandaProposta(dip, p.id, improntaProposta(p, nome), "jarvis");
     if (e.ok) n++;
+  }
+  return n;
+}
+
+/** Una proposta rimasta «in invio» da più di 10 minuti (per esempio il server si è fermato a metà): esito incerto. */
+export const BLOCCATA_MS = 10 * 60_000;
+export const ESITO_INCERTO = "Esito incerto: non so se Costructo l'ha ricevuta. Controlla in Costructo; puoi rimandarla senza paura (non nasce un doppione).";
+
+/**
+ * Recupera le proposte rimaste «in invio»: si cerca in Costructo per chiave doppione (GET /v1/proposte?dal=). Trovata → mandata;
+ * non trovata o Costructo non risponde → «esito incerto» (si può rimandare: la chiave doppione evita i doppioni).
+ */
+export async function recuperaBloccate(dip: DipendenzeProposte): Promise<number> {
+  const { db } = dip;
+  const ora = dip.ora?.() ?? Date.now();
+  const bloccate = db.prepare("SELECT * FROM proposte WHERE stato = 'in_invio' AND aggiornata < ? LIMIT 50").all(ora - BLOCCATA_MS) as RigaProposta[];
+  let n = 0;
+  for (const p of bloccate) {
+    const a = dip.aziendeCostructo().find((x) => x.id === p.azienda_id && x.client.configurato);
+    let trovata: { id?: string; stato?: string } | undefined;
+    if (a) {
+      try {
+        const lista = await a.client.elencaProposte({ dal: new Date(p.creata - 864e5).toISOString().slice(0, 10) });
+        trovata = lista.find((x) => (x as Record<string, unknown>).chiaveDoppione === p.chiave_doppione);
+      } catch { /* esito incerto */ }
+    }
+    if (trovata?.id) db.prepare("UPDATE proposte SET stato = 'inviata', id_costructo = ?, stato_costructo = ?, esito = 'Mandata (ritrovata in Costructo).', inviata = ?, aggiornata = ? WHERE id = ? AND stato = 'in_invio'").run(String(trovata.id), String(trovata.stato ?? "in_attesa"), ora, ora, p.id);
+    else db.prepare("UPDATE proposte SET stato = 'errore', esito = ?, aggiornata = ? WHERE id = ? AND stato = 'in_invio'").run(ESITO_INCERTO, ora, p.id);
+    registra(db, "proposta.invio", trovata ? "fatto" : "errore", "sistema", { proposta: p.id, motivo: trovata ? "ritrovata in Costructo" : "esito incerto" });
+    n++;
   }
   return n;
 }

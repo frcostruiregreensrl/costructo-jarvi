@@ -68,7 +68,7 @@ const costructo = createServer((req, res) => {
     "/api/assistente/v1/io": { versione: 1, token: { id: 1, etichetta: "Jarvis (finto)" }, azienda: a.azienda },
     ...(prima ? {
       "/api/assistente/v1/cantieri": { cantieri: [{ id: "C1", nome: "Villa Rosa (finto)", lat: 45.0, lon: 9.0 }, { id: "C2", nome: "Scuola media (finta)" }] },
-      "/api/assistente/v1/operai": { operai: [{ id: "O1", nome: "Mario", cognome: "Rossi (finto)", attivo: true }, { id: "O2", nome: "Gino", cognome: "Neri (finto)", attivo: true }] },
+      "/api/assistente/v1/operai": { operai: [{ id: "O1", nome: "Mario Rossi (finto)", attivo: true }, { id: "O2", nome: "Gino Neri (finto)", attivo: true }] },
       "/api/assistente/v1/controparti": { controparti: [{ id: "K1", nome: "Cliente Prova Srl", telefono: "+39 333 000 0199" }] },
       "/api/assistente/v1/preventivi": { preventivi: [{ numero: "P7", cliente: "Cliente Prova Srl", stato: "inviato", dataInvio: new Date(Date.now() - 12 * 864e5).toISOString().slice(0, 10) }] },
       "/api/assistente/v1/agenda": { impegni: [{ titolo: "Sopralluogo (finto)", inizio: domani.toISOString(), cliente: "Cliente Prova Srl", luogo: "Villa Rosa (finto)" }] },

@@ -644,6 +644,8 @@ export const STRUMENTI = [
     },
     azione: "proposta.prepara", viste: ["lavoro", "tutto"], oggetto: (i) => i.documento,
     input: z.object({ destinatario: z.string().min(1).max(140), documento: z.string().min(1).max(80), azienda: z.string().max(80) }).strict(),
+    // Se serve la conferma, il controllo «azienda nominata da Luigi» si rifà al sì con le SUE parole di questo turno.
+    datiConferma: (_i, c) => ({ messaggioLuigi: c.messaggioLuigi.slice(0, 2000) }),
     perRegistro: (i) => ({ azienda: i.azienda || undefined }),
     esegui: async (i, c) => {
       if (!c.whatsapp) return SENZA_FUNZIONI;
@@ -781,7 +783,7 @@ export async function rispondiConferma(db: Db, id: string, scelta: "conferma" | 
     registra(db, r.azione, "negato", "luigi", { conferma: id, motivo: "annullata da Luigi" });
     return { ok: true, messaggio: "Va bene, non faccio niente." };
   }
-  const dati = JSON.parse(r.dati) as { ids?: string[]; strumento?: string; input?: Record<string, unknown>; contattoId?: string; spazio?: string; testo?: string; impronta?: string; voci?: Array<{ id: string; impronta: string }> };
+  const dati = JSON.parse(r.dati) as { ids?: string[]; strumento?: string; input?: Record<string, unknown>; contattoId?: string; spazio?: string; testo?: string; impronta?: string; voci?: Array<{ id: string; impronta: string }>; messaggioLuigi?: string };
   let messaggio = "Fatto.";
   if (dati.ids) {
     const indice = typeof scelta === "number" ? scelta : dati.ids.length === 1 ? 0 : -1;
@@ -817,7 +819,7 @@ export async function rispondiConferma(db: Db, id: string, scelta: "conferma" | 
     if (!whatsapp) return { ok: false, messaggio: "Le proposte non sono disponibili in questo momento." };
     if (db.prepare("UPDATE conferme SET stato = 'confermata' WHERE id = ? AND stato = 'in_attesa'").run(id).changes === 0) return { ok: false, messaggio: "Questa richiesta non è più in attesa." };
     const i = dati.input as { destinatario: string; documento: string; azienda: string };
-    const e = await preparaInvioDocumenti(db, whatsapp.aziendeCostructo(), i, "");
+    const e = await preparaInvioDocumenti(db, whatsapp.aziendeCostructo(), i, dati.messaggioLuigi ?? "");
     if (!e.propostaId) return { ok: false, messaggio: e.domanda ?? e.rifiuto ?? "Non ho preparato niente." };
     registra(db, "proposta.prepara", "fatto", "luigi", { proposta: e.propostaId, conferma: id });
     return { ok: true, messaggio: "Proposta pronta nella pagina Proposte: la vedi per intero e la mandi a Costructo con «Sì, manda». Non è ancora partita." };

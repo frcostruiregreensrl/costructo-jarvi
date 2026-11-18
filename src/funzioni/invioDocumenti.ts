@@ -9,13 +9,14 @@ import type { AziendaCollegata } from "../aziende.js";
 import { trovaAziende, nomiAziende } from "../aziende.js";
 import type { VoceDocumento } from "../costructo.js";
 import { creaProposta } from "../proposte/archivio.js";
-import { contropartiDi, contropartiPerNome, documentiDi } from "./costructoLetture.js";
-import { normalizza } from "./date.js";
+import { contropartiDi, contropartiPerNome, documentiDi, documentoDellAzienda } from "./costructoLetture.js";
+import { dataBreve, normalizza } from "./date.js";
 
 export interface EsitoInvioDocumenti { propostaId?: string; domanda?: string; rifiuto?: string }
 
 const nomeDoc = (v: VoceDocumento) => String(v.titolo || v.nome || v.tipoDocumento || v.tipo || v.id);
-const stessa = (a: string, b: string) => { const x = normalizza(a).trim(), y = normalizza(b).trim(); return !!x && !!y && (x === y || x.includes(y) || y.includes(x)); };
+/** Nome, identificativo e scadenza: quello che Luigi deve vedere prima di confermare. */
+const descriviDoc = (v: VoceDocumento) => { const s = v.scadenza || v.dataScadenza; return `${nomeDoc(v)} (ID ${v.id ?? "?"}${s ? `, scade il ${dataBreve(s)}` : ""})`; };
 
 /** Aziende nominate nel messaggio di Luigi (per nome intero). */
 export function aziendeNominate(messaggio: string, aziende: Array<{ id: string; nome: string }>): string[] {
@@ -40,22 +41,24 @@ export async function preparaInvioDocumenti(db: Db, collegate: AziendaCollegata[
   if (!q.length) return { domanda: "Quale documento devo mandare?" };
   const corrispondono = voci.filter((v) => { const t = normalizza(`${v.titolo ?? ""} ${v.nome ?? ""} ${v.tipoDocumento ?? ""} ${v.tipo ?? ""}`); return q.every((p) => t.includes(p)); });
   if (!corrispondono.length) return { rifiuto: `Non trovo «${r.documento}» tra i documenti di ${a.nome} in Costructo.` };
-  // Il documento deve essere DI QUESTA azienda: un documento intestato ad altri (azienda o ditta diversa) non si manda.
-  const altrui = corrispondono.filter((v) => (v.azienda && !stessa(v.azienda, a.nome)) || ((v.ditta || v.intestatario) && !stessa(String(v.ditta || v.intestatario), a.nome)));
-  const propri = corrispondono.filter((v) => !altrui.includes(v));
-  if (!propri.length) return { rifiuto: `Il documento «${r.documento}» che ho trovato non è di ${a.nome} (è intestato a ${altrui.map((v) => v.azienda || v.ditta || v.intestatario).join(", ")}): non lo preparo.` };
-  if (propri.length > 3) return { domanda: `Ho trovato ${propri.length} documenti «${r.documento}» di ${a.nome}: quale? ${propri.slice(0, 5).map(nomeDoc).join(", ")}.` };
+  // Il documento deve essere DI QUESTA azienda (campo «di_chi» di Costructo, o ditta/intestatario): mai di un subappaltatore o di altri.
+  const propri = corrispondono.filter((v) => documentoDellAzienda(v, a.nome));
+  const altrui = corrispondono.filter((v) => !propri.includes(v));
+  if (!propri.length) return { rifiuto: `Il documento «${r.documento}» che ho trovato non è di ${a.nome} (è intestato a ${altrui.map((v) => v.ditta || v.intestatario || v.azienda || v.di_chi || "altri").join(", ")}): non lo preparo.` };
+  if (propri.length > 1) return { domanda: `Ho trovato ${propri.length} documenti «${r.documento}» di ${a.nome}: quale mando? ${propri.slice(0, 5).map(descriviDoc).join("; ")}.` };
+  const doc = propri[0];
+  if (!doc.id) return { rifiuto: "Il documento in Costructo non ha un identificativo: non posso prepararlo." };
   const controparti = await contropartiDi(db, a, ora);
   const dest = contropartiPerNome(r.destinatario, controparti);
   if (!dest.length) return { rifiuto: `Non trovo «${r.destinatario}» tra le controparti di ${a.nome} in Costructo: dimmi il nome esatto.` };
-  if (dest.length > 1) return { domanda: `A chi, di preciso? ${dest.slice(0, 5).map((d) => d.nome || d.ragioneSociale).join(", ")}.` };
+  if (dest.length > 1 || !dest[0].id) return { domanda: `A chi, di preciso? ${dest.slice(0, 5).map((d) => d.nome || d.ragioneSociale).join(", ")}.` };
   const destinatario = String(dest[0].nome || dest[0].ragioneSociale);
-  const voceIds = propri.map((v) => String(v.id)).filter((x) => x && x !== "undefined");
-  if (!voceIds.length) return { rifiuto: "Il documento in Costructo non ha un identificativo: non posso prepararlo." };
-  const chiave = `jarvis:invio:${a.id}:${createHash("sha256").update(`${voceIds.join(",")}|${destinatario}|${new Date(ora).toISOString().slice(0, 10)}`).digest("hex").slice(0, 24)}`;
+  const controparteId = String(dest[0].id);
+  const voceIds = [String(doc.id)];
+  const chiave = `jarvis:invio:${a.id}:${createHash("sha256").update(`${voceIds.join(",")}|${controparteId}|${new Date(ora).toISOString().slice(0, 10)}`).digest("hex").slice(0, 24)}`;
   const p = creaProposta(db, {
-    tipo: "invio_documenti", aziendaId: a.id, chiave, origine: "jarvis", titolo: `Mandare ${propri.map(nomeDoc).join(", ")} a ${destinatario}`,
-    dati: { voceIds, destinatario }, nomi: { voceIds: propri.map(nomeDoc).join(", "), destinatario },
+    tipo: "invio_documenti", aziendaId: a.id, chiave, origine: "jarvis", titolo: `Mandare ${nomeDoc(doc)} a ${destinatario}`,
+    dati: { voceIds, destinatario, controparteId }, nomi: { voceIds: descriviDoc(doc), destinatario, controparteId: destinatario },
     note: ["Costructo manda i documenti dal suo flusso dopo la tua approvazione: Jarvis non manda niente."],
   }, ora);
   return { propostaId: p.proposta.id };

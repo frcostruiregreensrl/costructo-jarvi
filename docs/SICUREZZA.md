@@ -168,8 +168,13 @@ Ogni punto ha un test in `test/funzioni.test.ts`.
   Chat private escludibili.
 - **Per azienda**: un contatto «da assegnare» non produce niente finché Luigi non sceglie. «Documenti al volo» rifiuta i documenti di
   un'altra azienda o di un subappaltatore, e rifiuta se Luigi nomina un'azienda diversa da quella chiesta dall'AI.
-- **Operai**: chi è operaio lo dice Luigi. La **posizione degli operai non si salva e non si usa mai** (GDPR); quando un contatto
-  diventa operaio, le sue posizioni già salvate si cancellano.
+- **Operai**: chi è operaio lo dice Luigi, **per azienda**. Prima di mandare le ore, Jarvis ricontrolla l'operaio in `/v1/operai`
+  dell'azienda. La **posizione degli operai non si salva e non si usa mai** (GDPR). Una posizione si salva solo per i clienti e i
+  fornitori trovati in Costructo, o per chi Luigi ha detto «non è un operaio». Mai dai gruppi. Quando un contatto diventa operaio,
+  si cancellano le sue posizioni e quello che Jarvis ne aveva dedotto.
+- **Impronta del carico**: copre tutto quello che parte (anche l'impronta di ogni allegato). I primi byte dei file devono
+  corrispondere al formato. I modelli di Meta hanno un id che vale una volta sola. Il database usa `secure_delete`.
+  Un messaggio cancellato da chi l'ha mandato toglie anche allegati, scontrini, promesse e proposte non partite.
 - **Allegati**: scaricamento spento di serie; solo per i contatti delle aziende; token solo verso `graph.facebook.com`,
   `*.fbsbx.com`, `*.whatsapp.net` o il fornitore configurato; niente reindirizzamenti; al massimo 10 MB (16 MB per i vocali);
   impronta del contenuto controllata; solo JPEG, PNG, HEIC, WebP e PDF. Mostrati nella pagina con `Content-Security-Policy: sandbox`.

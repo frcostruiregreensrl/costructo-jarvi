@@ -1761,7 +1761,7 @@ async function confermaModello(t, li) {
     no.addEventListener("click", () => box.remove());
     si.addEventListener("click", async () => {
       si.disabled = true;
-      try { const r = await api("/api/funzioni/modello/invia", { metodo: "POST", corpo: { ...corpo, conferma: true, impronta: pr.impronta } }); box.replaceChildren(crea("p", "esito", r.messaggio)); }
+      try { const r = await api("/api/funzioni/modello/invia", { metodo: "POST", corpo: { ...corpo, conferma: true, id: pr.id, impronta: pr.impronta } }); box.replaceChildren(crea("p", "esito", r.messaggio)); }
       catch (e) { box.replaceChildren(crea("p", "esito male", e.message)); }
     });
     const az = crea("div", "azioni"); az.append(si, no); box.append(az);
@@ -1783,7 +1783,7 @@ function disegnaPerOggi(d) {
   const semplice = (t) => crea("li", "", t);
   const promessa = (p) => {
     const li = crea("li", p.scaduta ? "scaduta" : "");
-    li.append(document.createTextNode(`${p.scaduta ? "Non mantenuta: " : "Entro oggi: "}a ${p.contatto} hai promesso ${p.cosa}. `));
+    li.append(document.createTextNode(`${p.scaduta ? "Non mantenuta" : "Entro oggi"}: a ${p.contatto} hai scritto «${p.cosa}». `));
     const b = crea("button", "link", "Fatta"); b.type = "button";
     b.addEventListener("click", async () => { try { await api(`/api/funzioni/promesse/${encodeURIComponent(p.id)}/chiudi`, { metodo: "POST", corpo: {} }); li.remove(); } catch { /* resta */ } });
     li.append(b);
@@ -1843,7 +1843,7 @@ async function caricaFunzioniImpostazioni() {
       const li = crea("li");
       li.append(crea("span", "", `${o.nomeContatto} (${o.nomeAzienda}): ${o.nomeOperaio}`));
       const b = crea("button", "secondario", "Dimentica"); b.type = "button"; b.setAttribute("aria-label", `Dimentica: ${o.nomeContatto}`);
-      b.addEventListener("click", async () => { await api(`/api/funzioni/operai/${encodeURIComponent(o.contatto)}`, { metodo: "DELETE" }).catch(() => {}); caricaFunzioniImpostazioni(); });
+      b.addEventListener("click", async () => { await api(`/api/funzioni/operai/${encodeURIComponent(o.contatto)}?azienda=${encodeURIComponent(o.azienda)}`, { metodo: "DELETE" }).catch(() => {}); caricaFunzioniImpostazioni(); });
       li.append(b);
       ul.append(li);
     }

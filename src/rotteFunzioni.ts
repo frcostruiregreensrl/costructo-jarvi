@@ -18,7 +18,8 @@ import { ErroreWhatsapp, PRIVATO } from "./whatsapp/tipi.js";
 import { improntaConferma, stessaImpronta } from "./sicurezza/testoConfermato.js";
 import { correggiProposta, leggiProposta, proposteVisibili, scartaProposta, vistaProposta, allegatiDi } from "./proposte/archivio.js";
 import { mandaProposte, aggiornaStatiProposte, nomeAziendaDi, MAX_LOTTO } from "./proposte/invio.js";
-import { ErroreProposte, NOMI_TIPI, TIPI_COSTRUCTO, tipoValido, vaACostructo } from "./proposte/tipi.js";
+import { randomBytes } from "node:crypto";
+import { CAMPI, ErroreProposte, NOMI_TIPI, TIPI_COSTRUCTO, tipoValido, vaACostructo } from "./proposte/tipi.js";
 import { proponiDaMessaggio } from "./funzioni/analisi.js";
 import { briefingFunzioni, chiudiPromessa } from "./funzioni/briefingFunzioni.js";
 import { cercaOvunque } from "./funzioni/cerca.js";
@@ -45,6 +46,7 @@ export function montaRotteFunzioni(app: Express, o: OpzioniRotteFunzioni): void 
   const { db } = o;
   const dip = o.whatsapp.dip;
   const nome = nomeAziendaDi(dip);
+  const oggi = () => giornoDa(Date.now(), 0, dip.fuso);
   const visibile = (aziendaId: string, vista: "privato" | "lavoro" | "tutto") => vista === "tutto" || (vista === "privato") === (aziendaId === PRIVATO);
 
   // ------------------------------------------------------------ pagina Proposte
@@ -53,7 +55,7 @@ export function montaRotteFunzioni(app: Express, o: OpzioniRotteFunzioni): void 
     const tutte = proposteVisibili(db, vista, undefined, 300).filter((p) => p.stato !== "scartata");
     res.json({
       vista, aziende: dip.aziende(), tipi: NOMI_TIPI,
-      proposte: tutte.map((p) => vistaProposta(p, nome)),
+      proposte: tutte.map((p) => vistaProposta(p, nome, oggi())),
     });
   });
   app.get("/api/proposte/:id/scelte", async (req, res) => {
@@ -64,11 +66,28 @@ export function montaRotteFunzioni(app: Express, o: OpzioniRotteFunzioni): void 
     const [cantieri, operai] = await Promise.all([cantieriDi(db, a).catch(() => []), operaiDi(db, a).catch(() => [])]);
     res.json({ cantieri: cantieri.map((c) => ({ id: c.id, nome: c.nome })), operai: operai.filter((x) => x.attivo).map((x) => ({ id: x.id, nome: x.nome })) });
   });
-  const SchemaCorrezione = z.object({ dati: z.record(z.unknown()), nomi: z.record(z.string().max(140)).optional() }).strict();
-  app.patch("/api/proposte/:id", (req, res) => {
+  // I nomi di cantiere e operaio si prendono da Costructo QUI (mai dal browser), e l'id deve esistere per quell'azienda.
+  const SchemaCorrezione = z.object({ dati: z.record(z.unknown()), nomi: z.unknown().optional() }).strict();
+  app.patch("/api/proposte/:id", async (req, res) => {
     const d = SchemaCorrezione.safeParse(req.body);
     if (!d.success) return res.status(400).json({ errore: "Dati non validi." });
-    try { res.json(vistaProposta(correggiProposta(db, String(req.params.id), d.data.dati, d.data.nomi ?? {}), nome)); } catch (e) { errore(res, e); }
+    const p = leggiProposta(db, String(req.params.id));
+    if (!p) return res.status(404).json({ errore: "Proposta non trovata." });
+    const nomi: Record<string, string> = {};
+    try {
+      const campi = new Map((CAMPI[p.tipo] ?? []).map((c) => [c.chiave, c.tipo]));
+      const a = o.aziendeCostructo().find((x) => x.id === p.azienda_id && x.client.configurato);
+      for (const [k, v] of Object.entries(d.data.dati)) {
+        const tipo = campi.get(k);
+        if ((tipo !== "cantiere" && tipo !== "operaio") || v === null || v === "" || v === undefined) continue;
+        if (!a) throw new ErroreProposte("Questa azienda non è collegata a Costructo.");
+        const elenco = tipo === "cantiere" ? (await cantieriDi(db, a)).map((c) => ({ id: c.id, nome: c.nome })) : (await operaiDi(db, a)).filter((x) => x.attivo);
+        const trovato = elenco.find((x) => x.id === String(v));
+        if (!trovato) throw new ErroreProposte(`${tipo === "cantiere" ? "Cantiere" : "Operaio"} non trovato in Costructo per ${a.nome}.`);
+        nomi[k] = trovato.nome;
+      }
+      res.json(vistaProposta(correggiProposta(db, p.id, d.data.dati, nomi), nome, oggi()));
+    } catch (e) { errore(res, e); }
   });
   app.delete("/api/proposte/:id", (req, res) => { res.status(scartaProposta(db, String(req.params.id)) ? 200 : 404).json({ ok: true }); });
   // L'invio vero: solo con {conferma: true} e l'impronta del testo completo di OGNI proposta (pulsante «Sì, manda»).
@@ -98,7 +117,7 @@ export function montaRotteFunzioni(app: Express, o: OpzioniRotteFunzioni): void 
     try {
       const id = await proponiDaMessaggio(dip, d.data.messaggioId, d.data.tipo);
       registra(db, "proposta.prepara", "fatto", "luigi", { proposta: id, tipo: d.data.tipo, da: "messaggio" });
-      res.json(vistaProposta(leggiProposta(db, id)!, nome));
+      res.json(vistaProposta(leggiProposta(db, id)!, nome, oggi()));
     } catch (e) { errore(res, e); }
   });
   app.post("/api/proposte/diario", async (req, res) => {
@@ -106,7 +125,7 @@ export function montaRotteFunzioni(app: Express, o: OpzioniRotteFunzioni): void 
     if (!d.success) return res.status(400).json({ errore: "Scegli azienda e cantiere." });
     try {
       const id = await preparaDiario(db, o.aziendeCostructo(), d.data.azienda, d.data.cantiereId, d.data.data || giornoDa(Date.now(), 0, dip.fuso), dip.fuso);
-      res.json(vistaProposta(leggiProposta(db, id)!, nome));
+      res.json(vistaProposta(leggiProposta(db, id)!, nome, oggi()));
     } catch (e) { errore(res, e); }
   });
 
@@ -133,7 +152,7 @@ export function montaRotteFunzioni(app: Express, o: OpzioniRotteFunzioni): void 
   app.post("/api/funzioni/rubrica/:contatto/proponi", async (req, res) => {
     const d = z.object({ controparteId: z.string().min(1).max(80) }).strict().safeParse(req.body);
     if (!d.success) return res.status(400).json({ errore: "Scegli la controparte." });
-    try { const id = await proponiContatto(db, dip.aziende(), o.aziendeCostructo(), String(req.params.contatto), d.data.controparteId); res.json(vistaProposta(leggiProposta(db, id)!, nome)); } catch (e) { errore(res, e); }
+    try { const id = await proponiContatto(db, dip.aziende(), o.aziendeCostructo(), String(req.params.contatto), d.data.controparteId); res.json(vistaProposta(leggiProposta(db, id)!, nome, oggi())); } catch (e) { errore(res, e); }
   });
   app.get("/api/funzioni/scontrini", (req, res) => {
     const vista = vistaDa(req.query.vista);
@@ -152,8 +171,9 @@ export function montaRotteFunzioni(app: Express, o: OpzioniRotteFunzioni): void 
   app.post("/api/funzioni/operai/domande/:id", async (req, res) => {
     const d = z.object({ operaioId: z.string().max(80) }).strict().safeParse(req.body);
     if (!d.success) return res.status(400).json({ errore: "Scegli un operaio o «Non è un operaio»." });
-    const q = db.prepare("SELECT * FROM wa_domande_operaio WHERE id = ?").get(String(req.params.id)) as { contatto_id: string; azienda_id: string } | undefined;
+    const q = db.prepare("SELECT * FROM wa_domande_operaio WHERE id = ? AND stato = 'aperta'").get(String(req.params.id)) as { contatto_id: string; azienda_id: string } | undefined;
     if (!q) return res.status(404).json({ errore: "Domanda non trovata." });
+    if (leggiContatto(db, q.contatto_id)?.spazio !== q.azienda_id) return res.status(409).json({ errore: "Il contatto è passato a un'altra azienda: la domanda non vale più." });
     let operaio: { id: string; nome: string } | null = null;
     if (d.data.operaioId) {
       const a = o.aziendeCostructo().find((x) => x.id === q.azienda_id && x.client.configurato);
@@ -165,7 +185,10 @@ export function montaRotteFunzioni(app: Express, o: OpzioniRotteFunzioni): void 
     res.json({ ok: true, messaggio: operaio ? `Fatto: è ${operaio.nome}. Me lo ricordo.` : "Fatto: non è un operaio. Me lo ricordo." });
   });
   app.get("/api/funzioni/operai", (_req, res) => { res.json(elencoOperaiContatti(db, dip.aziende())); });
-  app.delete("/api/funzioni/operai/:contatto", (req, res) => { res.status(dimenticaOperaio(db, String(req.params.contatto)) ? 200 : 404).json({ ok: true }); });
+  app.delete("/api/funzioni/operai/:contatto", (req, res) => {
+    const azienda = typeof req.query.azienda === "string" && req.query.azienda ? req.query.azienda : undefined;
+    res.status(dimenticaOperaio(db, String(req.params.contatto), azienda) ? 200 : 404).json({ ok: true });
+  });
 
   // ------------------------------------------------------------ Impostazioni → funzioni WhatsApp
   const statoImpostazioni = () => {
@@ -238,23 +261,33 @@ export function montaRotteFunzioni(app: Express, o: OpzioniRotteFunzioni): void 
 
   // ------------------------------------------------------------ promemoria con un modello di Meta (parte 2): mai automatico
   const SchemaModello = z.object({ telefono: z.string().min(6).max(30), nome: z.string().min(1).max(512), lingua: z.string().min(2).max(6), parametri: z.array(z.string().max(300)).max(10) }).strict();
+  // Ogni «prepara» dà un id che vale UNA volta (si consuma all'invio, anche se fallisce): niente doppio messaggio.
+  const preparati = new Map<string, { impronta: string; creato: number }>();
   const improntaModello = (d: z.infer<typeof SchemaModello>) => improntaConferma(`modello:${normalizzaTelefono(d.telefono)}`, JSON.stringify({ nome: d.nome, lingua: d.lingua, parametri: d.parametri }));
   app.post("/api/funzioni/modello/prepara", (req, res) => {
     const d = SchemaModello.safeParse(req.body);
     if (!d.success || !normalizzaTelefono(d.data.telefono)) return res.status(400).json({ errore: "Dati del modello non validi." });
     if (!leggiImpostazioni(db).whatsappModelliAttivi) return res.status(409).json({ errore: "I modelli di Meta sono spenti (parte 2): usa il link wa.me e mandalo tu dal telefono." });
     try { controllaModello({ nome: d.data.nome, lingua: d.data.lingua, parametri: d.data.parametri }); } catch (e) { return errore(res, e); }
-    res.json({ anteprima: `Modello «${d.data.nome}» (${d.data.lingua}) al numero ${mascheraTelefono(d.data.telefono)}, con: ${d.data.parametri.join(" · ") || "nessun testo"}`, impronta: improntaModello(d.data) });
+    const id = randomBytes(12).toString("hex");
+    const ora = Date.now();
+    for (const [k, v] of preparati) if (ora - v.creato > 15 * 60_000) preparati.delete(k);
+    preparati.set(id, { impronta: improntaModello(d.data), creato: ora });
+    res.json({ id, anteprima: `Modello «${d.data.nome}» (${d.data.lingua}) al numero ${mascheraTelefono(d.data.telefono)}, con: ${d.data.parametri.join(" · ") || "nessun testo"}`, impronta: improntaModello(d.data) });
   });
   app.post("/api/funzioni/modello/invia", async (req, res) => {
-    const d = SchemaModello.extend({ conferma: z.literal(true), impronta: z.string().regex(/^[0-9a-f]{64}$/) }).strict().safeParse(req.body);
+    const d = SchemaModello.extend({ conferma: z.literal(true), id: z.string().regex(/^[0-9a-f]{24}$/), impronta: z.string().regex(/^[0-9a-f]{64}$/) }).strict().safeParse(req.body);
     if (!d.success) return res.status(400).json({ errore: "Serve la tua conferma per mandare il modello." });
-    const { conferma: _c, impronta, ...m } = d.data;
+    const { conferma: _c, impronta, id, ...m } = d.data;
+    const preparato = preparati.get(id);
+    if (!preparato || Date.now() - preparato.creato > 15 * 60_000) return res.status(409).json({ errore: "Questo promemoria è già stato usato o è scaduto: non ho mandato niente." });
     if (!leggiImpostazioni(db).whatsappModelliAttivi) return res.status(409).json({ errore: "I modelli di Meta sono spenti (parte 2): non ho mandato niente." });
     if (!stessaImpronta(impronta, improntaModello(m))) {
       registra(db, "whatsapp.modello", "negato", "sistema", { motivo: "dati diversi da quelli confermati", numero: mascheraTelefono(m.telefono) });
       return res.status(409).json({ errore: "Il modello è cambiato dopo la conferma: non ho mandato niente." });
     }
+    if (!stessaImpronta(preparato.impronta, impronta)) return res.status(409).json({ errore: "Il modello è cambiato dopo la conferma: non ho mandato niente." });
+    preparati.delete(id); // consumato: un secondo clic non manda un secondo messaggio
     const coll = leggiCollegamento(dip);
     if (!invioPronto(coll)) return res.status(409).json({ errore: "WhatsApp non è collegato (parte 2): non ho mandato niente." });
     try {

@@ -295,13 +295,14 @@ CREATE TABLE IF NOT EXISTS wa_media_stato (
   quando INTEGER NOT NULL
 );
 -- Chi è un contatto WhatsApp tra gli operai di Costructo (in Costructo gli operai non hanno il telefono).
--- Scelta di Luigi: si ricorda. operaio_id '' = «non è un operaio».
+-- Scelta di Luigi, PER AZIENDA (un operaio di un'azienda non vale per l'altra): si ricorda. operaio_id '' = «non è un operaio».
 CREATE TABLE IF NOT EXISTS wa_operai (
-  contatto_id TEXT PRIMARY KEY,
+  contatto_id TEXT NOT NULL,
   azienda_id TEXT NOT NULL,
   operaio_id TEXT NOT NULL,
   nome TEXT NOT NULL DEFAULT '',
-  scelto INTEGER NOT NULL
+  scelto INTEGER NOT NULL,
+  PRIMARY KEY (contatto_id, azienda_id)
 );
 CREATE TABLE IF NOT EXISTS wa_domande_operaio (
   id TEXT PRIMARY KEY,
@@ -315,7 +316,8 @@ CREATE TABLE IF NOT EXISTS promesse (
   id TEXT PRIMARY KEY,
   contatto_id TEXT NOT NULL,
   messaggio_id TEXT NOT NULL UNIQUE,
-  cosa TEXT NOT NULL,
+  cosa TEXT NOT NULL,                       -- la promessa intera, come l'ha scritta Luigi
+  chiave TEXT NOT NULL DEFAULT '',          -- la cosa promessa (per capire quando è mantenuta)
   scadenza INTEGER NOT NULL,
   stato TEXT NOT NULL CHECK (stato IN ('aperta','mantenuta','chiusa')),
   creata INTEGER NOT NULL
@@ -361,6 +363,8 @@ export function apriDb(file: string): Db {
   const db = new Database(file);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  // Fase 3b: quello che si cancella (dopo 30 giorni o a richiesta) viene sovrascritto anche nel file.
+  db.pragma("secure_delete = ON");
   db.exec(SCHEMA);
   // Indice di ricerca per i messaggi e le mail salvati prima della Fase 3b (una volta sola: poi ci pensano i trigger).
   db.exec(`INSERT INTO cerca_wa (testo, rif) SELECT ${TESTO_WA("m")}, m.id FROM wa_messaggi m WHERE m.id NOT IN (SELECT rif FROM cerca_wa)`);

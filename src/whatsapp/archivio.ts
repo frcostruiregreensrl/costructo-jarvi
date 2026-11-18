@@ -90,6 +90,10 @@ export function nomeSpazio(spazio: string, aziende: AziendaWa[]): string {
 
 export function assegnaSpazio(db: Db, contattoId: string, spazio: string, fonte: "luigi" | "costructo", ora = Date.now()): void {
   db.prepare("UPDATE wa_contatti SET spazio = ?, fonte_spazio = ?, aggiornato = ? WHERE id = ?").run(spazio, fonte, ora, contattoId);
+  // Fase 3b: la scelta «operaio» vale per azienda. Le domande sugli operai di un'altra azienda si chiudono e i messaggi
+  // in attesa si rianalizzano (per la nuova azienda Jarvis chiede di nuovo).
+  db.prepare("UPDATE wa_domande_operaio SET stato = 'risposta' WHERE contatto_id = ? AND azienda_id <> ? AND stato = 'aperta'").run(contattoId, spazio);
+  db.prepare("DELETE FROM wa_analisi WHERE stato = 'attesa' AND messaggio_id IN (SELECT id FROM wa_messaggi WHERE contatto_id = ?)").run(contattoId);
   db.prepare("UPDATE wa_domande SET stato = 'risposta', risposta = ? WHERE contatto_id = ? AND stato = 'aperta'").run(spazio, contattoId);
 }
 

@@ -19,15 +19,16 @@ import { testoBreve } from "../whatsapp/telefono.js";
 import { PRIVATO, type ContattoWa, type DipendenzeWhatsapp, type MessaggioWa } from "../whatsapp/tipi.js";
 import { leggiChiavi, trascrittoreScelto, secondiStimati, costoTrascrizione, registraCostoTrascrizione, SPENTA, MAX_BYTE } from "../trascrizione/trascrizione.js";
 import { creaProposta, leggiProposta, allegatiDi, datiDi, extraDi } from "../proposte/archivio.js";
+import { contenutoCoerente } from "../proposte/firme.js";
 import { MIME_ALLEGATI, MAX_ALLEGATI, type RiferimentoAllegato, type TipoProposta } from "../proposte/tipi.js";
 import { dataBreve, fineGiorno, giornoDa, normalizza } from "./date.js";
 import { dataIso } from "../tempo.js";
 import {
-  leggiAppuntamento, leggiCompleanno, leggiDatiFornitore, leggiDocumento, leggiOre, leggiPromessa, leggiRicordati, leggiRighe, leggiScadenza,
+  leggiAppuntamento, leggiCompleanno, leggiDatiFornitore, leggiDocumento, leggiOre, type OreLette, leggiPromessa, leggiRicordati, leggiRighe, leggiScadenza,
   richiestaLavoro, tipoFoto, eScontrino,
 } from "./rilevatori.js";
-import { cantieriCitati, cantieriDi, cantierePiuVicino, contropartiDi, contropartiPerNome, documentiDi, oVuoto, type CantiereNoto } from "./costructoLetture.js";
-import { chiediOperaio, operaioDelContatto, togliPosizioni } from "./operai.js";
+import { cantieriCitati, cantieriDi, cantierePiuVicino, contropartiDi, contropartiPerNome, documentiDi, documentoDellAzienda, oVuoto, tutteLeParole, type CantiereNoto } from "./costructoLetture.js";
+import { chiediOperaio, eOperaio, nonOperaio, operaioDelContatto, togliPosizioni } from "./operai.js";
 import { estraiConAi, testoAi } from "./estrai.js";
 
 /** Messaggi analizzati al massimo per giro; messaggi più vecchi di 7 giorni non si analizzano più. */
@@ -99,28 +100,44 @@ export async function giroVocali(dip: DipendenzeWhatsapp, limite = 10): Promise<
 }
 
 // ---------------------------------------------------------------- 2) foto e PDF
-/** Scarica foto e PDF dei contatti delle aziende (mai privati, mai da assegnare, mai gruppi), solo con l'interruttore acceso. */
+/**
+ * Scarica foto e PDF dei contatti delle aziende (mai privati, mai da assegnare, mai gruppi), solo con l'interruttore acceso.
+ * Anche dei 7 giorni prima dell'accensione (gli id degli allegati di WhatsApp valgono 30 giorni): le proposte già nate senza
+ * allegato lo ricevono, e le foto non ancora usate si rianalizzano.
+ */
 export async function giroAllegati(dip: DipendenzeWhatsapp, limite = 10): Promise<number> {
   const { db } = dip;
   if (!leggiImpostazioni(db).whatsappScaricaAllegati) return 0;
   const ora = dip.ora?.() ?? Date.now();
   const lista = db.prepare(`SELECT m.* FROM wa_messaggi m JOIN wa_contatti c ON c.id = m.contatto_id
       WHERE m.tipo IN ('image','document') AND m.direzione = 'in' AND m.storico = 0 AND m.gruppo_id = '' AND c.gruppo = 0
-      AND c.spazio <> '' AND c.spazio <> ? AND m.ricevuto > ? AND m.id NOT IN (SELECT messaggio_id FROM wa_media_stato)
-      ORDER BY m.ricevuto LIMIT ?`).all(PRIVATO, ora - 2 * 864e5, limite) as MessaggioWa[];
+      AND c.spazio <> '' AND c.spazio <> ? AND m.ricevuto > ? AND m.revocato = 0 AND m.id NOT IN (SELECT messaggio_id FROM wa_media_stato)
+      ORDER BY m.ricevuto DESC LIMIT ?`).all(PRIVATO, ora - ETA_MASSIMA_ANALISI, limite) as MessaggioWa[];
   let n = 0;
   for (const m of lista) {
     const x = mediaDi(m);
     if (!x.idMedia || (x.mime && !(MIME_ALLEGATI as readonly string[]).includes(x.mime.split(";")[0].trim()))) { segnaMedia(db, m.id, "formato", ora); continue; }
     try {
       const s = await scaricaMedia(leggiCollegamento(dip), x.idMedia, { fetchFn: dip.fetchFn, risolvi: dip.risolvi, maxByte: 10 * 1024 * 1024 });
-      if (!(MIME_ALLEGATI as readonly string[]).includes(s.mime)) { s.dati.fill(0); segnaMedia(db, m.id, "formato", ora); continue; }
+      if (!(MIME_ALLEGATI as readonly string[]).includes(s.mime) || !contenutoCoerente(s.dati, s.mime)) { s.dati.fill(0); segnaMedia(db, m.id, "formato", ora); continue; }
       const estensione = { "image/jpeg": "jpg", "image/png": "png", "image/heic": "heic", "image/webp": "webp", "application/pdf": "pdf" }[s.mime] ?? "bin";
       const nome = (x.nomeFile || `${m.tipo === "image" ? "foto" : "documento"}-${dataIso(m.quando, dip.fuso)}.${estensione}`).slice(0, 120);
       db.prepare("INSERT OR IGNORE INTO wa_allegati (id, messaggio_id, contatto_id, mime, nome, dimensione, sha256, dati, scaricato) VALUES (?,?,?,?,?,?,?,?,?)")
         .run(nuovoId("f"), m.id, m.contatto_id, s.mime, nome, s.dimensione, s.sha256, s.dati, ora);
       segnaMedia(db, m.id, "scaricato", ora);
       registra(db, "whatsapp.allegato", "fatto", "sistema", { messaggio: m.id, tipo: m.tipo, dimensione: s.dimensione });
+      // Proposte già nate da questo messaggio senza allegato (scaricamento acceso dopo): ricevono l'allegato (nuova impronta).
+      const rif = allegatoDi(db, m.id);
+      if (rif) {
+        for (const p of db.prepare("SELECT * FROM proposte WHERE messaggio_id = ? AND allegati = '[]' AND stato IN ('da_confermare','errore','attesa_costructo')").all(m.id) as Array<{ id: string; tipo: string; avvisi: string }>) {
+          if ((p.tipo === "rinnovo_documento" || p.tipo === "documento_fornitore") && rif.mime !== "application/pdf") continue;
+          const extra = extraDi(p);
+          extra.note = extra.note.filter((x) => !/non scaricato/.test(x));
+          db.prepare("UPDATE proposte SET allegati = ?, avvisi = ?, aggiornata = ? WHERE id = ?").run(JSON.stringify([rif]), JSON.stringify(extra), ora, p.id);
+        }
+        // Una foto analizzata quando lo scaricamento era spento si rianalizza.
+        db.prepare("DELETE FROM wa_analisi WHERE messaggio_id = ? AND esito LIKE '%non scaricata%'").run(m.id);
+      }
       n++;
     } catch (e) {
       segnaMedia(db, m.id, /grande/.test(String((e as Error).message)) ? "troppo_grande" : "errore", ora);
@@ -210,7 +227,7 @@ function promessa(k: Contesto, m: MessaggioWa, c: ContattoWa, t: string): void {
     k.db.prepare("UPDATE promesse SET stato = 'mantenuta' WHERE contatto_id = ? AND stato = 'aperta' AND creata <= ?").run(c.id, m.quando);
     return;
   }
-  const aperte = k.db.prepare("SELECT id, cosa FROM promesse WHERE contatto_id = ? AND stato = 'aperta'").all(c.id) as Array<{ id: string; cosa: string }>;
+  const aperte = k.db.prepare("SELECT id, chiave AS cosa FROM promesse WHERE contatto_id = ? AND stato = 'aperta'").all(c.id) as Array<{ id: string; cosa: string }>;
   for (const p of aperte) {
     const parola = normalizza(p.cosa).split(/[^a-z]+/).find((x) => x.length >= 5);
     if (parola && normalizza(t).includes(parola) && /\b(ecco|ti ho (mandato|inviato)|in allegato|allego|come promesso|fatto)\b/.test(normalizza(t))) k.db.prepare("UPDATE promesse SET stato = 'mantenuta' WHERE id = ?").run(p.id);
@@ -218,8 +235,8 @@ function promessa(k: Contesto, m: MessaggioWa, c: ContattoWa, t: string): void {
   const p = leggiPromessa(t, k.ora, k.dip.fuso);
   if (!p) return;
   const scadenza = fineGiorno(p.data, k.dip.fuso);
-  const r = k.db.prepare("INSERT OR IGNORE INTO promesse (id, contatto_id, messaggio_id, cosa, scadenza, stato, creata) VALUES (?,?,?,?,?, 'aperta', ?)")
-    .run(nuovoId("q"), c.id, m.id, p.cosa, scadenza, m.quando);
+  const r = k.db.prepare("INSERT OR IGNORE INTO promesse (id, contatto_id, messaggio_id, cosa, chiave, scadenza, stato, creata) VALUES (?,?,?,?,?,?, 'aperta', ?)")
+    .run(nuovoId("q"), c.id, m.id, p.testo, p.cosa, scadenza, m.quando);
   if (r.changes) { k.esito.promesse++; registra(k.db, "whatsapp.promessa", "fatto", "jarvis", { contatto: c.id, messaggio: m.id }); }
 }
 
@@ -229,8 +246,9 @@ async function analizzaLavoro(k: Contesto, m: MessaggioWa, c: ContattoWa): Promi
   const x = mediaDi(m);
   const nome = nomeContatto(c);
   const base = { aziendaId: c.spazio, contattoId: c.id, messaggioId: m.id, rifEsterno: m.wamid } as const;
-  const op = operaioDelContatto(db, c.id);
-  const operaio = !!op?.operaio_id;
+  // La scelta «operaio» vale solo per l'azienda attuale del contatto (un operaio di un'altra azienda qui non conta).
+  const op = operaioDelContatto(db, c.id, c.spazio);
+  const operaio = !!op?.operaio_id || eOperaio(db, c.id);
 
   if (m.direzione === "eco") {
     promessa(k, m, c, t);
@@ -247,6 +265,11 @@ async function analizzaLavoro(k: Contesto, m: MessaggioWa, c: ContattoWa): Promi
   // ---- posizione (funzione 9). Mai per gli operai (GDPR): la posizione non si usa e non resta salvata.
   if (m.tipo === "location") {
     if (operaio) { togliPosizioni(db, c.id); return { stato: "fatta", esito: { posizione: "operaio: non usata" } }; }
+    // Contatto non ancora chiarito: la posizione non si usa (e non è stata salvata) finché Luigi non dice che non è un operaio.
+    if (!nonOperaio(db, c)) {
+      if (!op) { chiediOperaio(db, c.id, c.spazio, k.ora); k.esito.domande++; }
+      return { stato: "fatta", esito: { posizione: "non usata: contatto non ancora chiarito" } };
+    }
     if (typeof x.lat !== "number" || typeof x.lon !== "number") return { stato: "fatta" };
     const vicino = cantierePiuVicino({ lat: x.lat, lon: x.lon }, await cantieriAzienda(k, c.spazio));
     if (vicino && vicino.metri <= RAGGIO_CANTIERE_M) return { stato: "fatta", cantiere: vicino.cantiere, esito: { vicino: vicino.cantiere.nome, metri: Math.round(vicino.metri) } };
@@ -290,10 +313,22 @@ async function analizzaLavoro(k: Contesto, m: MessaggioWa, c: ContattoWa): Promi
   // ---- testo (e vocali trascritti)
   if (!t) return { stato: "fatta" };
   const ore = leggiOre(t, k.ora, dip.fuso);
-  if (ore) {
-    // Funzione 19. Le ore si propongono solo per i contatti che Luigi ha detto essere operai.
+  if (ore.length) {
+    // Funzione 19. Le ore si propongono solo per i contatti che Luigi ha detto essere operai DI QUESTA azienda.
     if (!op) { chiediOperaio(db, c.id, c.spazio, k.ora); k.esito.domande++; return { stato: "attesa" }; }
-    if (operaio) return oreProposta(k, m, c, op.operaio_id, op.nome, ore);
+    if (op.operaio_id) {
+      let ultimo: Risultato = { stato: "fatta" };
+      const futuri: string[] = [];
+      for (const [n, o] of ore.entries()) {
+        if (o.futuro) { futuri.push(`${String(o.ore).replace(".", ",")} ore il ${dataBreve(o.data!)}`); continue; }
+        ultimo = await oreProposta(k, m, c, op.operaio_id, op.nome, o, ore.length > 1 ? n + 1 : 0);
+      }
+      if (futuri.length) {
+        registra(db, "proposta.prepara", "negato", "jarvis", { tipo: "ore", motivo: "ore di un giorno futuro", messaggio: m.id });
+        return { ...ultimo, esito: { ...(ultimo.esito ?? {}), futuro: `Ore di un giorno che non è ancora arrivato: non proposte (${futuri.join(", ")}).` } };
+      }
+      return ultimo;
+    }
   }
   if (/\b(consegn\w*|arrivat\w*|scaricat\w*|ddt|bolla)\b/i.test(t) && leggiRighe(t).length) return carico(k, m, c, t, null);
   if (!operaio && richiestaLavoro(t)) {
@@ -320,25 +355,24 @@ async function analizzaLavoro(k: Contesto, m: MessaggioWa, c: ContattoWa): Promi
   return { stato: "fatta", ...(citati.length === 1 ? { cantiere: citati[0] } : {}) };
 }
 
-async function oreProposta(k: Contesto, m: MessaggioWa, c: ContattoWa, operaioId: string, nomeOperaio: string, ore: NonNullable<ReturnType<typeof leggiOre>>): Promise<Risultato> {
+async function oreProposta(k: Contesto, m: MessaggioWa, c: ContattoWa, operaioId: string, nomeOperaio: string, ore: OreLette, voce = 0): Promise<Risultato> {
   const { db, dip } = k;
   const data = ore.data ?? giornoDa(k.ora, 0, dip.fuso);
   const cantieri = await cantieriAzienda(k, c.spazio);
-  const citati = cantieriCitati(ore.cantiere ?? testoDi(m), cantieri);
+  const citati = cantieriCitati(ore.cantiere ?? ore.testo, cantieri);
   const cantiere = citati.length === 1 ? citati[0] : undefined;
-  // Prima si guarda in Costructo: se il rapportino c'è già, niente proposta.
+  // Prima si guarda in Costructo (/v1/ore → verifica.esiste): se il rapportino c'è già, niente proposta.
   const a = azienda(dip, c.spazio);
   if (a) {
     try {
-      const esistenti = await a.client.oreLista({ operaioId, data, ...(cantiere ? { cantiereId: cantiere.id } : {}) });
-      if (esistenti.some((r) => String(r.operaioId ?? operaioId) === operaioId && (!r.data || r.data.slice(0, 10) === data) && (!cantiere || !r.cantiereId || String(r.cantiereId) === cantiere.id))) {
+      if ((await a.client.oreVerifica({ operaioId, data, ...(cantiere ? { cantiereId: cantiere.id } : {}) })).esiste) {
         registra(db, "proposta.prepara", "negato", "jarvis", { tipo: "ore", motivo: "rapportino già presente in Costructo", messaggio: m.id });
         return { stato: "fatta", cantiere, esito: { ore: "già presente in Costructo" } };
       }
     } catch { /* lettura non disponibile: Costructo controllerà i doppioni (409) */ }
   }
   nuova(k, {
-    aziendaId: c.spazio, contattoId: c.id, messaggioId: m.id, rifEsterno: m.wamid, tipo: "ore", chiave: `wa:${m.wamid}:ore`,
+    aziendaId: c.spazio, contattoId: c.id, messaggioId: m.id, rifEsterno: m.wamid, tipo: "ore", chiave: `wa:${m.wamid}:ore${voce ? `:${voce}` : ""}`,
     titolo: `Ore di ${nomeOperaio}: ${String(ore.ore).replace(".", ",")} il ${dataBreve(data)}${cantiere ? ` (${cantiere.nome})` : ""}`,
     dati: { operaioId, cantiereId: cantiere?.id, data, ore: ore.ore, oreEconomia: ore.oreEconomia, descrizione: "Ore mandate su WhatsApp" },
     nomi: { operaioId: nomeOperaio, ...(cantiere ? { cantiereId: cantiere.nome } : {}) },
@@ -397,11 +431,13 @@ async function rinnovo(k: Contesto, m: MessaggioWa, c: ContattoWa, tipoDocumento
   const a = azienda(dip, c.spazio);
   const voci = a ? await oVuoto(documentiDi(db, a, k.ora)) : [];
   const parolaTipo = normalizza(tipoDocumento).split(/[^a-z]+/)[0];
-  const parole = normalizza(nome).split(/[^a-z]+/).filter((p) => p.length >= 4);
+  // Funzione 15: si cerca la voce del SUBAPPALTATORE: tutte le parole del nome di chi scrive, a parole intere, nella ditta;
+  // mai i documenti dell'azienda stessa. Nessuna o più voci: la voce resta vuota e si chiede a Luigi.
+  const nomeAzienda = dip.aziende().find((x) => x.id === c.spazio)?.nome ?? "";
   const trovate = voci.filter((v) => {
-    const tipo = normalizza(`${v.tipoDocumento ?? ""} ${v.tipo ?? ""} ${v.titolo ?? ""} ${v.nome ?? ""}`);
-    const ditta = normalizza(`${v.ditta ?? ""} ${v.intestatario ?? ""}`);
-    return tipo.includes(parolaTipo) && parole.some((p) => ditta.includes(p));
+    const tipo = ` ${normalizza(`${v.tipoDocumento ?? ""} ${v.tipo ?? ""} ${v.titolo ?? ""} ${v.nome ?? ""}`).replace(/[^a-z0-9]+/g, " ")} `;
+    const ditta = `${v.ditta ?? ""} ${v.intestatario ?? ""}`;
+    return tipo.includes(` ${parolaTipo} `) && !documentoDellAzienda(v, nomeAzienda) && tutteLeParole(nome, ditta);
   });
   const voce = trovate.length === 1 ? trovate[0] : undefined;
   const scadenza = leggiScadenza(`${x.didascalia ?? ""} ${x.nomeFile ?? ""}`, k.ora, dip.fuso);
@@ -411,7 +447,9 @@ async function rinnovo(k: Contesto, m: MessaggioWa, c: ContattoWa, tipoDocumento
     dati: { voceId: voce?.id, ditta: voce ? undefined : nome, tipoDocumento, dataScadenza: scadenza ?? undefined },
     allegati: all && all.mime === "application/pdf" ? [all] : [],
     nomi: voce ? { voceId: String(voce.titolo || voce.nome || voce.tipoDocumento || voce.id) } : {},
-    note: [...(voce ? [] : [trovate.length > 1 ? "Più voci in Costructo corrispondono: scegline una in Costructo." : "Voce non trovata in Costructo: uso il nome della ditta."]),
+    note: [...(voce ? [] : [trovate.length > 1
+      ? `Di quale voce si tratta? In Costructo ne corrispondono ${trovate.length}: scegli tu in Costructo.`
+      : "Di quale voce si tratta? In Costructo non ne ho trovata una sola della ditta: indico solo il nome della ditta."]),
       ...(scadenza ? [] : ["Scadenza non scritta nel messaggio: inseriscila tu (Jarvis non legge il PDF)."]), ...(all ? [] : ["PDF non scaricato (scaricamento spento o non riuscito)."])],
   });
   return { stato: "fatta" };
@@ -444,7 +482,7 @@ async function carico(k: Contesto, m: MessaggioWa, c: ContattoWa, t: string, all
   nuova(k, {
     aziendaId: c.spazio, contattoId: c.id, messaggioId: m.id, rifEsterno: m.wamid, tipo: "carico_magazzino", chiave: `wa:${m.wamid}:carico`,
     titolo: `Consegna da ${nomeContatto(c)} del ${dataBreve(giorno)}${ct.trovato ? ` · ${ct.trovato.nome}` : ""}`,
-    dati: { cantiereId: ct.trovato?.id, righe: righeFinali.length ? righeFinali : undefined }, allegati: all ? [all] : [],
+    dati: { fornitore: nomeContatto(c), cantiereId: ct.trovato?.id, righe: righeFinali.length ? righeFinali : undefined }, allegati: all ? [all] : [],
     nomi: ct.trovato ? { cantiereId: ct.trovato.nome } : {}, note: ["Quantità solo proposte: le controlli tu.", ...note],
   });
   return { stato: "fatta", cantiere: ct.trovato };
@@ -512,14 +550,14 @@ export async function proponiDaMessaggio(dip: DipendenzeWhatsapp, messaggioId: s
     return crea({ tipo, aziendaId: PRIVATO, titolo: `Da WhatsApp: ${nome}`, dati: { titolo: `${nome}: ${t.slice(0, 100) || "promemoria"}`, data: a?.data ?? giornoDa(ora, 1, dip.fuso), ora: a?.ora }, note: a ? [] : ["Controlla il giorno."] });
   }
   if (tipo === "agenda_privata") throw new Error("Questo contatto è di un'azienda: usa un appuntamento in agenda di Costructo.");
-  const op = operaioDelContatto(db, c.id);
+  const op = operaioDelContatto(db, c.id, c.spazio);
   const ct = await cantiereDelMessaggio(k, c, t);
   const nomiCantiere: Record<string, string> = ct.trovato ? { cantiereId: ct.trovato.nome } : {};
   const all = allegatoDi(db, m.id);
   switch (tipo) {
     case "ore": {
-      if (!op?.operaio_id) throw new Error("Prima dimmi quale operaio è questo contatto.");
-      const o = leggiOre(t, ora, dip.fuso);
+      if (!op?.operaio_id) throw new Error("Prima dimmi quale operaio è questo contatto (per questa azienda).");
+      const o = leggiOre(t, ora, dip.fuso).find((x) => !x.futuro);
       return crea({ tipo, aziendaId: c.spazio, titolo: `Ore di ${op.nome}`, dati: { operaioId: op.operaio_id, cantiereId: ct.trovato?.id, data: o?.data ?? giornoDa(ora, 0, dip.fuso), ore: o?.ore, oreEconomia: o?.oreEconomia }, nomi: { operaioId: op.nome, ...nomiCantiere }, note: o ? [] : ["Ore da scrivere."] });
     }
     case "foto":

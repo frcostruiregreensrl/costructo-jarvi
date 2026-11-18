@@ -89,10 +89,41 @@ Costructo, operai, analisi, briefing, ricerca, rubrica, diario, invio di documen
 
 | Prova | Esito |
 |---|---|
-| `npm test` | **173/173** (150 di prima + 23 nuovi) |
+| `npm test` | **182/182** (150 di prima + 32 nuovi; uno di prima aggiornato, vedi sotto) |
 | `npx tsc --noEmit` | nessun errore |
 | `npm run build` e avvio di `node dist/server.js` | funzionano |
 | `node script/prova-interfaccia.mjs` | **89/89** (67 di prima + 22 nuovi) |
+| dopo la revisione | `tsc` pulito, `npm test` 182/182, build e avvio ok, interfaccia 89/89 |
+
+## Correzioni dopo la revisione indipendente
+
+- **Operaio per azienda**: la risposta «è l'operaio X» vale solo per quell'azienda. Se Luigi sposta il contatto, Jarvis chiede di nuovo.
+  Prima di mandare le ore, Jarvis ricontrolla in `/v1/operai` dell'azienda che l'operaio ci sia e sia attivo.
+- **DURC**: nella ditta devono esserci tutte le parole del nome di chi scrive, a parole intere. I documenti dell'azienda stessa
+  (campo `di_chi` di Costructo) non si usano mai. Con nessuna voce o con più voci, la voce resta vuota e Jarvis chiede.
+- **Posizioni**: si salvano solo per i clienti e i fornitori trovati in Costructo, o per chi Luigi ha detto «non è un operaio».
+  Mai dai gruppi. Quando un contatto diventa operaio, Jarvis cancella le sue posizioni, il «vicino al cantiere» e i «nuovo sopralluogo?».
+- **Documenti al volo**: la proposta porta anche `controparteId` (da Costructo). Se il documento o il destinatario possono essere
+  più di uno, Jarvis chiede. La conferma mostra nome, ID e scadenza del documento.
+- **Ore**: «7-12» è una fascia oraria, non una data. Le ore di un giorno futuro non si propongono (lo controlla anche lo schema).
+  «Villa Rosa 8h, Scuola 6h» diventa due proposte.
+- **Impronta**: copre tutto quello che parte (tipo, chiave, origine, riferimento, titolo, dati, impronta di ogni allegato) e il testo
+  mostrato. Un allegato aggiunto dopo rende la conferma non più valida.
+- **Correzioni**: i nomi di cantiere e operaio li prende il server da Costructo (mai dal browser). Un id che non c'è viene rifiutato.
+- **Modelli di Meta**: ogni «prepara» dà un id che vale una volta sola. Un doppio clic non manda due messaggi.
+- **Proposte rimaste «in invio»** da più di 10 minuti: Jarvis le cerca in Costructo per chiave doppione. Se le trova sono mandate,
+  altrimenti c'è scritto «esito incerto» e si possono rimandare senza doppioni.
+- **Messaggio cancellato da chi l'ha mandato**: Jarvis cancella gli allegati scaricati, gli scontrini e le promesse, e scarta
+  le proposte non ancora partite. Su quelle già mandate scrive un avviso.
+- **File**: i primi byte devono corrispondere al formato (PDF, JPEG, PNG, WebP, HEIC). Database con `secure_delete`.
+  L'indice di ricerca si compatta a ogni pulizia.
+- **Scaricamento acceso dopo**: Jarvis recupera anche gli allegati degli ultimi 7 giorni. Le proposte già nate ricevono l'allegato.
+- **Promesse**: si tiene la frase intera («ti mando la fattura entro il 30/11»).
+- **Contratto di Costructo** allineato: `operai {id, nome, attivo}`, `/v1/ore` con `verifica.esiste`, `{proposta}` / `{proposte}`,
+  errori `{error, campi|ambito|campo|motivo}`. Un 404 con `campo` vuol dire «dato non trovato», non «pagina mancante».
+  `carico_magazzino.fornitore`. Il Costructo finto dei test è stretto come quello vero.
+- **Test di prima modificato**: `whatsapp.test.ts` («tipi…»). Il testo della posizione di un contatto non ancora chiarito ora è
+  «Posizione condivisa (non salvata…)» e non contiene più l'indirizzo.
 
 ## Da sapere
 

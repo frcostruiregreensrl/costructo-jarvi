@@ -50,6 +50,7 @@ export const SCHEMI_DATI: Record<TipoProposta, z.ZodTypeAny> = {
     .refine((d) => !!d.voceId || !!d.ditta, "serve la voce del documento o il nome della ditta"),
   carico_magazzino: z.object({
     cantiereId: id.optional(),
+    fornitore: facoltativo(140),
     righe: z.array(z.object({ descrizione: breve(200), quantita: z.number().gt(0).max(1_000_000), unita: breve(20), oggettoId: id.optional() }).strict()).min(1).max(100),
   }).strict(),
   richiesta_lavoro: z.object({
@@ -63,7 +64,7 @@ export const SCHEMI_DATI: Record<TipoProposta, z.ZodTypeAny> = {
     tipo: z.enum(["preventivo", "fattura"]),
   }).strict(),
   diario: z.object({ cantiereId: id, data, testo: breve(4000) }).strict(),
-  invio_documenti: z.object({ voceIds: z.array(id).min(1).max(10), destinatario: breve(200) }).strict(),
+  invio_documenti: z.object({ voceIds: z.array(id).min(1).max(10), destinatario: breve(200), controparteId: id.optional() }).strict(),
   agenda_privata: z.object({ titolo: breve(MAX_TITOLO), data, ora: ora.optional() }).strict(),
 };
 
@@ -96,6 +97,7 @@ export const CAMPI: Record<TipoProposta, Campo[]> = {
     { chiave: "dataScadenza", etichetta: "Nuova scadenza", tipo: "data", obbligatorio: true },
   ],
   carico_magazzino: [
+    { chiave: "fornitore", etichetta: "Fornitore", tipo: "testo" },
     { chiave: "cantiereId", etichetta: "Cantiere", tipo: "cantiere" },
     { chiave: "righe", etichetta: "Righe (una per riga: quantità unità descrizione)", tipo: "righe", obbligatorio: true },
   ],
@@ -133,6 +135,7 @@ export const CAMPI: Record<TipoProposta, Campo[]> = {
   invio_documenti: [
     { chiave: "voceIds", etichetta: "Documenti", tipo: "sola_lettura", obbligatorio: true },
     { chiave: "destinatario", etichetta: "Destinatario", tipo: "sola_lettura", obbligatorio: true },
+    { chiave: "controparteId", etichetta: "Controparte in Costructo", tipo: "sola_lettura" },
   ],
   agenda_privata: [
     { chiave: "titolo", etichetta: "Promemoria", tipo: "testo", obbligatorio: true },

@@ -59,7 +59,8 @@ export function pulisciDati(d: Record<string, unknown>): Record<string, unknown>
  * Una proposta privata (agenda privata) non può essere di un'azienda, e una per Costructo non può essere privata.
  */
 export function creaProposta(db: Db, n: NuovaProposta, ora = Date.now()): { proposta: RigaProposta; nuova: boolean } {
-  const chiave = n.chiave.slice(0, MAX_CHIAVE);
+  // Contratto di Costructo: chiave di 1–120 caratteri, senza spazi.
+  const chiave = n.chiave.replace(/\s+/g, "_").slice(0, MAX_CHIAVE);
   const gia = db.prepare("SELECT * FROM proposte WHERE chiave_doppione = ?").get(chiave) as RigaProposta | undefined;
   if (gia) return { proposta: gia, nuova: false };
   if (vaACostructo(n.tipo) && n.aziendaId === PRIVATO) throw new ErroreProposte("Le cose private non vanno in Costructo.");
@@ -89,9 +90,13 @@ export function proposteVisibili(db: Db, vista: "privato" | "lavoro" | "tutto", 
   return db.prepare(`SELECT * FROM proposte ${dove.length ? `WHERE ${dove.join(" AND ")}` : ""} ORDER BY creata DESC LIMIT ?`).all(...valori, limite) as RigaProposta[];
 }
 
-/** Controllo con zod dei dati per il tipo. Restituisce i dati puliti oppure l'elenco di quello che manca. */
-export function validaDati(tipo: TipoProposta, dati: Record<string, unknown>): { ok: true; dati: Record<string, unknown> } | { ok: false; mancano: string[] } {
+/**
+ * Controllo con zod dei dati per il tipo. Restituisce i dati puliti oppure l'elenco di quello che manca.
+ * `oggi` (AAAA-MM-GG nel fuso di Luigi): le ore non possono essere di un giorno che non è ancora arrivato.
+ */
+export function validaDati(tipo: TipoProposta, dati: Record<string, unknown>, oggi?: string): { ok: true; dati: Record<string, unknown> } | { ok: false; mancano: string[] } {
   const v = SCHEMI_DATI[tipo].safeParse(pulisciDati(dati));
+  if (v.success && tipo === "ore" && oggi && String((v.data as { data: string }).data) > oggi) return { ok: false, mancano: ["Giorno (le ore non possono essere di un giorno futuro)"] };
   if (v.success) return { ok: true, dati: v.data as Record<string, unknown> };
   const etichette = new Map(CAMPI[tipo].map((c) => [c.chiave, c.etichetta]));
   const mancano = [...new Set(v.error.issues.map((i) => {
@@ -132,9 +137,23 @@ export function testoCompleto(p: RigaProposta, nomeAzienda: NomeAzienda): string
   return righe.join("\n");
 }
 
-/** Impronta della conferma: azienda + tipo + chiave + testo completo. */
+/** JSON con le chiavi in ordine (lo stesso contenuto dà sempre la stessa stringa). */
+export function jsonStabile(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(jsonStabile).join(",")}]`;
+  if (v && typeof v === "object") return `{${Object.keys(v as object).sort().map((k) => `${JSON.stringify(k)}:${jsonStabile((v as Record<string, unknown>)[k])}`).join(",")}}`;
+  return JSON.stringify(v ?? null);
+}
+
+/**
+ * Impronta della conferma: TUTTO quello che parte (tipo, chiave doppione, origine, riferimento, titolo, ogni dato, impronta del
+ * contenuto di ogni allegato) più il testo mostrato a Luigi. Se cambia qualunque cosa (anche un allegato aggiunto dopo), non vale più.
+ */
 export function improntaProposta(p: RigaProposta, nomeAzienda: NomeAzienda): string {
-  return improntaConferma(`proposta:${p.azienda_id}:${p.tipo}:${p.chiave_doppione}`, testoCompleto(p, nomeAzienda));
+  const carico = jsonStabile({
+    azienda: p.azienda_id, tipo: p.tipo, chiaveDoppione: p.chiave_doppione, origine: p.origine, rifEsterno: p.rif_esterno, titolo: p.titolo,
+    dati: pulisciDati(datiDi(p)), allegati: allegatiDi(p).map((a) => ({ nome: a.nome, mime: a.mime, sha256: a.sha256 })),
+  });
+  return improntaConferma(`proposta:${carico}`, testoCompleto(p, nomeAzienda));
 }
 
 /** Luigi corregge i dati (solo finché non è partita): la proposta torna «da confermare» con una nuova impronta. */
@@ -162,9 +181,9 @@ export function scartaProposta(db: Db, id: string): boolean {
 }
 
 /** Per l'interfaccia: tutto quello che serve per mostrarla e confermarla (testo completo + impronta). */
-export function vistaProposta(p: RigaProposta, nomeAzienda: NomeAzienda) {
+export function vistaProposta(p: RigaProposta, nomeAzienda: NomeAzienda, oggi?: string) {
   const dati = datiDi(p);
-  const valida = validaDati(p.tipo, dati);
+  const valida = validaDati(p.tipo, dati, oggi);
   const extra = extraDi(p);
   return {
     id: p.id, tipo: p.tipo, nomeTipo: NOMI_TIPI[p.tipo] ?? p.tipo, azienda: p.azienda_id, nomeAzienda: nomeAzienda(p.azienda_id),
@@ -195,6 +214,8 @@ export function pulisciFunzioniVecchie(db: Db, ora = Date.now()): number {
     n += db.prepare("DELETE FROM promesse WHERE creata < ?").run(limite).changes;
     n += db.prepare("DELETE FROM scontrini WHERE creato < ?").run(limite).changes;
     db.prepare("DELETE FROM wa_domande_operaio WHERE creata < ?").run(limite);
+    // L'indice di ricerca si compatta (le righe cancellate non restano nei suoi segmenti).
+    db.exec("INSERT INTO cerca_wa (cerca_wa) VALUES ('optimize'); INSERT INTO cerca_posta (cerca_posta) VALUES ('optimize');");
     return n;
   })();
 }

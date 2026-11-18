@@ -237,7 +237,9 @@ test("tipi: testo, foto e documento (solo dati, nessun download), audio, video, 
     assert.equal(media(1).nomeFile, "Fattura_123.pdf");
     assert.equal(media(2).tipo, "audio");
     assert.equal(media(3).tipo, "video");
-    assert.match(m[4].testo, /Posizione: Cantiere Nord, Via Prova 1/);
+    // Fase 3b (revisione D): la posizione di un contatto non ancora chiarito (potrebbe essere un operaio) non si salva.
+    assert.match(m[4].testo, /^Posizione condivisa \(non salvata/);
+    assert.doesNotMatch(m[4].testo + m[4].media, /Cantiere Nord|Via Prova/);
     assert.match(m[5].testo, /Contatto condiviso: Geom\. Verdi/);
     assert.ok(!m[5].testo.includes("3330000000"), "dei contatti condivisi non si tengono i numeri");
     assert.equal(m[6].tipo, "reaction");

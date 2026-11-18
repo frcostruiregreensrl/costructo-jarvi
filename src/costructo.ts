@@ -45,11 +45,11 @@ export const SchemaPreventivo = z.object({
 }).passthrough();
 export const SchemaVoceDocumento = z.object({
   id: testo, titolo: testo, nome: testo, tipo: testo, tipoDocumento: testo, ditta: testo, intestatario: testo, azienda: testo, aziendaId: testo,
-  scadenza: testo, dataScadenza: testo,
+  scadenza: testo, dataScadenza: testo, di_chi: testo,
 }).passthrough();
 export const SchemaOreCostructo = z.object({ id: testo, operaioId: testo, cantiereId: testo, data: testo, ore: numero }).passthrough();
 export const SchemaPropostaCostructo = z.object({
-  id: testo, tipo: testo, titolo: testo, stato: testo, motivo: testo, decisoIl: testo, record: z.unknown().optional(),
+  id: testo, tipo: testo, titolo: testo, stato: testo, motivo: testo, decisoIl: testo, chiaveDoppione: testo, record: z.unknown().optional(),
 }).passthrough();
 export const SchemaInventario = z.object({ id: testo, descrizione: testo, nome: testo, unita: testo }).passthrough();
 export type Operaio = z.infer<typeof SchemaOperaio>;
@@ -150,8 +150,16 @@ export function creaClientCostructo(o: OpzioniCostructo) {
     const grezzo = (await r.text().catch(() => "")).slice(0, MAX_BYTE);
     let dati: Record<string, unknown> = {};
     try { const j = JSON.parse(grezzo); if (j && typeof j === "object") dati = j as Record<string, unknown>; } catch { /* non JSON */ }
-    if (r.status === 409) throw new ErroreCostructo(String(dati.motivo ?? "già presente in Costructo").slice(0, 300), "doppione");
+    const errore = String(dati.error ?? dati.errore ?? "").slice(0, 200);
+    if (r.status === 409) throw new ErroreCostructo(String(dati.motivo ?? (errore || "già presente in Costructo")).slice(0, 300), "doppione");
+    // 404 con «campo» = Costructo non trova un dato della proposta (per esempio l'operaio): NON è la pagina che manca.
+    if (r.status === 404 && dati.campo) throw new ErroreCostructo(`Costructo non trova «${String(dati.campo).slice(0, 60)}»${errore ? `: ${errore}` : ""}.`, "risposta");
     if (r.status === 404 || r.status === 405) throw new ErroreCostructo("In attesa della pagina Proposte in Costructo.", "non_disponibile");
+    if (r.status === 400) {
+      const campi = Array.isArray(dati.campi) ? (dati.campi as unknown[]).map((c) => (typeof c === "string" ? c : JSON.stringify(c))).join(", ").slice(0, 200) : "";
+      throw new ErroreCostructo(`Costructo ha rifiutato la proposta${campi ? ` (campi: ${campi})` : ""}${errore ? `: ${errore}` : ""}.`, "risposta");
+    }
+    if (r.status === 429) throw new ErroreCostructo("Costructo dice: troppe richieste. Riprova tra poco.", "server");
     if (r.status === 401) throw new ErroreCostructo("Costructo non accetta il token: va rigenerato.", "token");
     if (r.status === 403) throw new ErroreCostructo("In attesa della pagina Proposte in Costructo (il token non ha l'ambito «proposte»).", "non_disponibile");
     if (r.status === 413) throw new ErroreCostructo("Proposta troppo grande per Costructo (allegati).", "risposta");
@@ -166,12 +174,14 @@ export function creaClientCostructo(o: OpzioniCostructo) {
     proponi,
     leggiProposta: async (id: string) => {
       const r = await leggi(`/proposte/${encodeURIComponent(id)}`);
-      const v = SchemaPropostaCostructo.safeParse(r.dati);
+      const d = r.dati as { proposta?: unknown } | null;
+      const v = SchemaPropostaCostructo.safeParse(d && typeof d === "object" && "proposta" in d ? d.proposta : d);
       return v.success ? v.data : null;
     },
-    elencaProposte: async (filtro: { stato?: string; dal?: string } = {}) => {
+    elencaProposte: async (filtro: { stato?: string; dal?: string; tipo?: string } = {}) => {
       const p: Record<string, string> = {};
       if (filtro.stato) p.stato = filtro.stato;
+      if (filtro.tipo) p.tipo = filtro.tipo;
       if (filtro.dal) p.dal = filtro.dal;
       const r = await leggi("/proposte", p);
       return lista(SchemaPropostaCostructo, ["proposte"]).parse(r.dati);
@@ -180,6 +190,19 @@ export function creaClientCostructo(o: OpzioniCostructo) {
     contropartiLista: async (telefono?: string) => lista(SchemaControparte, ["controparti"]).parse((await leggi("/controparti", telefono ? { telefono } : {})).dati),
     documenti: async () => lista(SchemaVoceDocumento, ["documenti", "voci"]).parse((await leggi("/documenti")).dati),
     oreLista: async (parametri: Record<string, string | number> = {}) => lista(SchemaOreCostructo, ["ore", "rapportini"]).parse((await leggi("/ore", parametri)).dati),
+    /** Fase 3b: c'è già un rapportino o una registrazione per operaio, cantiere e giorno? (`verifica.esiste` di Costructo) */
+    oreVerifica: async (parametri: { operaioId: string; data: string; cantiereId?: string }) => {
+      const p: Record<string, string> = { operaioId: parametri.operaioId, data: parametri.data, ...(parametri.cantiereId ? { cantiereId: parametri.cantiereId } : {}) };
+      const d = (await leggi("/ore", p)).dati as { verifica?: { esiste?: unknown; registrazioni?: unknown; rapportini?: unknown } } | null;
+      const v = d && typeof d === "object" && !Array.isArray(d) ? d.verifica : undefined;
+      if (v && typeof v === "object") {
+        const conta = (x: unknown) => (Array.isArray(x) ? x.length : 0);
+        return { esiste: v.esiste === true || conta(v.registrazioni) + conta(v.rapportini) > 0 };
+      }
+      // Risposta senza «verifica»: si guardano le righe (tollerante).
+      const righe = lista(SchemaOreCostructo, ["ore", "rapportini", "registrazioni"]).parse(d);
+      return { esiste: righe.some((r) => String(r.operaioId ?? parametri.operaioId) === parametri.operaioId && (!r.data || r.data.slice(0, 10) === parametri.data) && (!parametri.cantiereId || !r.cantiereId || String(r.cantiereId) === parametri.cantiereId)) };
+    },
     preventiviLista: async () => lista(SchemaPreventivo, ["preventivi"]).parse((await leggi("/preventivi")).dati),
     inventarioLista: async () => lista(SchemaInventario, ["inventario", "oggetti"]).parse((await leggi("/inventario")).dati),
     agendaLista: async (giorni = 7) => lista(SchemaImpegno, ["impegni", "agenda"]).parse((await leggi("/agenda", { giorni: Math.max(1, Math.min(60, Math.round(giorni))) })).dati),

@@ -6,28 +6,61 @@ import { leggiData, leggiOra, normalizza } from "./date.js";
 const numero = (s: string) => Number(s.replace(",", "."));
 
 // ---------------------------------------------------------------- ore (funzione 19)
-export interface OreLette { ore: number; oreEconomia?: number; cantiere?: string; data?: string; descrizione?: string }
+export interface OreLette { ore: number; oreEconomia?: number; cantiere?: string; data?: string; futuro?: boolean; testo: string }
 
-/** «8 ore cantiere Rossi», «oggi 7,5 h da Bianchi, 2 in economia», «ieri 8 ore in via Roma». */
-export function leggiOre(testo: string, ora: number, fuso: string): OreLette | null {
-  const t = testo.replace(/\s+/g, " ").trim();
-  const m = /(?:^|[^\d:.,])(\d{1,2}(?:[.,]\d{1,2})?)\s*(?:ore|h)\b(?!\s*\d)/i.exec(t);
+/** Nuova ogni volta: un'espressione «g» condivisa si porterebbe dietro la posizione dell'ultima ricerca. */
+const ORE = () => /(?:^|[^\d:.,\-])(\d{1,2}(?:[.,]\d{1,2})?)\s*(?:ore|h)\b(?!\s*\d)/gi;
+/** Fasce orarie («7-12», «dalle 8 alle 17», «7:30-12»): sono orari, non date e non ore lavorate. */
+const FASCIA = /\b(?:dalle\s+)?\d{1,2}(?:[.:]\d{2})?\s*(?:-|alle)\s*\d{1,2}(?:[.:]\d{2})?\b/gi;
+
+function oreDiUnPezzo(pezzo: string, ora: number, fuso: string): Omit<OreLette, "testo"> | null {
+  const m = ORE().exec(pezzo);
   if (!m) return null;
   const ore = numero(m[1]);
   if (!(ore > 0 && ore <= 24)) return null;
-  // «alle ore 15», «dalle 8 alle 17»: sono orari, non ore lavorate.
-  if (/\b(alle|dalle)\s+ore\b/i.test(t.slice(Math.max(0, m.index - 8), m.index + m[0].length + 2))) return null;
-  const out: OreLette = { ore };
-  const eco = /(\d{1,2}(?:[.,]\d{1,2})?)\s*(?:ore|h)?\s*(?:in|di|a)\s+economia/i.exec(t);
+  // «alle ore 15», «dalle ore 8»: sono orari, non ore lavorate.
+  if (/\b(alle|dalle)\s+ore\b/i.test(pezzo.slice(Math.max(0, m.index - 8), m.index + m[0].length + 2))) return null;
+  const out: Omit<OreLette, "testo"> = { ore };
+  const eco = /(\d{1,2}(?:[.,]\d{1,2})?)\s*(?:ore|h)?\s*(?:in|di|a)\s+economia/i.exec(pezzo);
   if (eco && eco.index !== m.index) {
     const e = numero(eco[1]);
     if (e >= 0 && e <= ore) out.oreEconomia = e;
   }
-  const c = /\b(?:cantiere|cant\.)\s+(?:di\s+|del\s+|della\s+|in\s+)?([A-Za-zÀ-ÿ'][\wÀ-ÿ' .]{1,40}?)(?=\s*(?:[,;!?\n]|$|\s(?:oggi|ieri|domani|e|con|per|dalle|alle|in economia|\d)\b))/i.exec(t)
-    ?? /\b(?:presso|da|dai|dal|dalla|in via|a casa)\s+([A-ZÀ-Ý][\wÀ-ÿ']{1,30}(?:\s+[A-ZÀ-Ý][\wÀ-ÿ']{1,30})?)/.exec(t);
+  const c = /\b(?:cantiere|cant\.)\s+(?:di\s+|del\s+|della\s+|in\s+)?([A-Za-zÀ-ÿ'][\wÀ-ÿ' .]{1,40}?)(?=\s*(?:[,;!?\n]|$|\s(?:oggi|ieri|domani|e|con|per|dalle|alle|in economia|\d)\b))/i.exec(pezzo)
+    ?? /\b(?:presso|da|dai|dal|dalla|in via|a casa)\s+([A-ZÀ-Ý][\wÀ-ÿ']{1,30}(?:\s+[A-ZÀ-Ý][\wÀ-ÿ']{1,30})?)/.exec(pezzo);
   if (c) out.cantiere = c[1].replace(/\s+/g, " ").trim().replace(/[.]$/, "");
-  const d = leggiData(t, ora, fuso, false);
+  const d = leggiData(pezzo.replace(FASCIA, " "), ora, fuso, false);
   if (d) out.data = d;
+  return out;
+}
+
+/**
+ * Ore lavorate: «8 ore cantiere Villa Rosa», «oggi 7,5 h da Bianchi, 2 in economia», «Villa Rosa 8h, Scuola 6h».
+ * Più ore nello stesso messaggio → una voce per ognuna (il giorno detto prima vale per le voci dopo).
+ * Le ore di un giorno futuro si segnano come «futuro»: non si propongono.
+ */
+export function leggiOre(testo: string, ora: number, fuso: string): OreLette[] {
+  const t = testo.replace(/\s+/g, " ").trim();
+  const posizioni = [...t.matchAll(ORE())].map((m) => m.index ?? 0);
+  if (!posizioni.length) return [];
+  // Pezzi: si taglia ai separatori («,», «;», « e », « poi ») che stanno tra due ore.
+  const tagli: number[] = [];
+  for (let i = 1; i < posizioni.length; i++) {
+    const tra = t.slice(posizioni[i - 1], posizioni[i]);
+    const sep = [...tra.matchAll(/[,;]| e (?=\D)| poi /g)].at(-1);
+    tagli.push(sep ? posizioni[i - 1] + (sep.index ?? 0) + 1 : posizioni[i]);
+  }
+  const pezzi = [0, ...tagli].map((da, i) => t.slice(da, tagli[i] ?? t.length).replace(/^[,;\s]+|[,;\s]+$/g, "").replace(/^(e|poi)\s+/i, ""));
+  const oggi = leggiData("oggi", ora, fuso)!;
+  const out: OreLette[] = [];
+  let ultimaData: string | undefined;
+  for (const pezzo of pezzi) {
+    const o = oreDiUnPezzo(pezzo, ora, fuso);
+    if (!o) continue;
+    if (o.data) ultimaData = o.data; else if (ultimaData) o.data = ultimaData;
+    if (o.data && o.data > oggi) o.futuro = true;
+    out.push({ ...o, testo: pezzo });
+  }
   return out;
 }
 
@@ -51,7 +84,8 @@ export function leggiAppuntamento(testo: string, ora: number, fuso: string): App
 const VERBI_PROMESSA = /\b(ti|le|vi|gli)\s+(mando|mandero|invio|inviero|giro|girero|faccio avere|faro avere|porto|portero|preparo|preparero|richiamo|chiamo|chiamero|faccio sapere|faro sapere|rispondo|rispondero|confermo|confermero)\b/;
 const QUANDO_PROMESSA = /\b(oggi|stasera|stamattina|in giornata|domani|dopodomani|entro\s+(?:oggi|domani|stasera|lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica|fine settimana|\d{1,2}[/\-]\d{1,2})|lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica|\d{1,2}[/\-]\d{1,2}|a breve|subito|piu tardi|dopo pranzo|in mattinata|nel pomeriggio)\b/;
 
-export interface PromessaLetta { cosa: string; data: string }
+/** `testo`: la promessa intera, come l'ha scritta Luigi; `cosa`: la cosa promessa (per capire quando è mantenuta). */
+export interface PromessaLetta { testo: string; cosa: string; data: string }
 
 /** Messaggio scritto da Luigi: «ti mando il preventivo domani», «le faccio sapere entro venerdì». */
 export function leggiPromessa(testo: string, ora: number, fuso: string): PromessaLetta | null {
@@ -68,7 +102,10 @@ export function leggiPromessa(testo: string, ora: number, fuso: string): Promess
   const quando = q[0].replace(/^entro\s+/, "");
   const data = /a breve|subito|piu tardi|dopo pranzo|in mattinata|nel pomeriggio/.test(quando) ? leggiData("oggi", ora, fuso) : leggiData(quando, ora, fuso, true);
   if (!data) return null;
-  return { cosa: cosa.slice(0, 80), data };
+  // La frase intera (originale, con maiuscole e date): «ti mando la fattura entro il 30/11».
+  const frasi = testo.replace(/\s+/g, " ").split(/(?<=[.!?])\s+|\n/);
+  const frase = frasi.find((f) => VERBI_PROMESSA.test(normalizza(f))) ?? testo;
+  return { testo: frase.trim().replace(/^(ok|certo|va bene|si|sì)[,!.]?\s+/i, "").slice(0, 200), cosa: cosa.slice(0, 80), data };
 }
 
 // ---------------------------------------------------------------- vita privata (funzione 10)
