@@ -66,3 +66,17 @@ di 4 KB, dati degli allegati, riassunti, urgenza), le risposte proposte o mandat
 tracce delle conferme automatiche più vecchie di 30 giorni, e i contatti rimasti senza messaggi. Resta solo la **scelta di
 Luigi** sull'azienda di un contatto (come un ricordo), finché non la cambia. I messaggi **sul telefono** non vengono mai
 toccati: Jarvis non li cancella e non li segna come letti.
+
+## Fase 3b: conservazione dei dati delle funzioni WhatsApp
+
+Anche qui vale la stessa regola: **al massimo 30 giorni**. La pulizia ogni 6 ore (`pulisciFunzioniVecchie` in
+`src/proposte/archivio.ts`, chiamata da `src/server.ts`) cancella:
+- le proposte;
+- le foto e i PDF scaricati;
+- le analisi dei messaggi e lo stato dei vocali;
+- le promesse, gli scontrini e le domande sugli operai.
+
+Quando un messaggio si cancella, sparisce anche dall'indice della ricerca unica (lo fanno i trigger del database).
+L'**audio dei vocali non si salva mai**: del vocale resta solo il testo, nel messaggio, per 30 giorni.
+Restano solo le **scelte di Luigi**: quale contatto è un operaio e quali chat private sono escluse, finché non le cambia lui.
+Le proposte già mandate restano in Costructo, che le tiene secondo le sue regole.

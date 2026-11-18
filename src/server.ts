@@ -5,6 +5,7 @@ import { creaCifratore } from "./sicurezza/cifra.js";
 import { creaApp, type ServiziApp } from "./app.js";
 import { pulisciPostaVecchia } from "./posta/archivio.js";
 import { pulisciWhatsappVecchio } from "./whatsapp/archivio.js";
+import { pulisciFunzioniVecchie } from "./proposte/archivio.js";
 import { leggiApple, eventiApple } from "./calendarioApple.js";
 import { pulisciConversazioniVecchie } from "./conversazioni.js";
 import { creaInvio, controllaOraBriefing } from "./push.js";
@@ -42,6 +43,9 @@ function pulizia() {
   // Fase 3: i messaggi WhatsApp (testo breve, riassunti, risposte, domande) si cancellano dopo 30 giorni.
   const wa = pulisciWhatsappVecchio(db);
   if (wa) registra(db, "whatsapp.pulizia", "fatto", "sistema", { messaggiCancellati: wa });
+  // Fase 3b: proposte, foto e PDF scaricati, promesse, scontrini, analisi: cancellati dopo 30 giorni.
+  const funzioni = pulisciFunzioniVecchie(db);
+  if (funzioni) registra(db, "funzioni.pulizia", "fatto", "sistema", { righeCancellate: funzioni });
 }
 pulizia();
 setInterval(pulizia, 6 * 3600_000).unref();

@@ -28,6 +28,19 @@ export const SchemaImpostazioni = z.object({
   whatsappConfermeAutomatiche: z.boolean().default(false),
   /** Fase 3: nelle notifiche di WhatsApp non mostrare nemmeno il nome del contatto (solo azienda e «messaggio urgente»). */
   whatsappNascondiContenuto: z.boolean().default(false),
+  // ---- Fase 3b: le 20 funzioni WhatsApp (tutto spento di serie)
+  /** Scaricare foto e PDF (e i vocali da trascrivere) da WhatsApp. Spento di serie: senza, Jarvis vede solo nome e tipo. */
+  whatsappScaricaAllegati: z.boolean().default(false),
+  /** Trascrizione dei vocali: «nessuno» = spenta (di serie). Le chiavi stanno nel segreto cifrato «trascrizione». */
+  trascrizioneFornitore: z.enum(["nessuno", "google", "openai"]).default("nessuno"),
+  /** Tipi di proposta che Jarvis manda a Costructo senza chiedere (restano bozze in Costructo). Vuoto di serie. */
+  proposteAutomatiche: z.array(z.enum(["ore", "foto", "rinnovo_documento", "carico_magazzino", "richiesta_lavoro", "agenda", "contatto", "documento_fornitore", "diario", "invio_documenti"])).max(10).default([]),
+  /** Chat private escluse dalle funzioni (promemoria, compleanni, vocali): id dei contatti WhatsApp. */
+  chatPrivateEscluse: z.array(z.string().min(1).max(40)).max(300).default([]),
+  /** Preventivi inviati da più di N giorni senza risposta: promemoria nel briefing. */
+  giorniPreventiviInAttesa: z.number().int().min(1).max(90).default(7),
+  /** Modelli approvati da Meta per i promemoria ai clienti (parte 2). Spento: si usano solo i link wa.me. */
+  whatsappModelliAttivi: z.boolean().default(false),
 });
 export type Impostazioni = z.infer<typeof SchemaImpostazioni>;
 
@@ -57,7 +70,7 @@ export function scriviValore(db: Db, chiave: string, valore: unknown): void {
 
 // ---------------------------------------------------------------- segreti cifrati (token Costructo, elenco delle aziende con i loro token, link iCal,
 // caselle email con le password, Apple ID con la password specifica per le app, collegamento WhatsApp…)
-export type NomeSegreto = "costructo_url" | "costructo_token" | "costructo_aziende" | "calendario_ical" | "elevenlabs_chiave" | "posta_caselle" | "calendario_apple" | "whatsapp";
+export type NomeSegreto = "costructo_url" | "costructo_token" | "costructo_aziende" | "calendario_ical" | "elevenlabs_chiave" | "posta_caselle" | "calendario_apple" | "whatsapp" | "trascrizione";
 
 export function salvaSegreto(db: Db, c: Cifratore, nome: NomeSegreto, valore: string): void {
   if (!valore) { db.prepare("DELETE FROM segreti WHERE nome = ?").run(nome); return; }

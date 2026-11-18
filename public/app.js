@@ -145,7 +145,7 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#menu").hidden) { $("#menu").hidden = true; $("#apriMenu").focus(); } });
 addEventListener("hashchange", instrada);
 
-const PAGINE = ["home", "posta", "whatsapp", "memoria", "registro", "spesa", "impostazioni"];
+const PAGINE = ["home", "posta", "whatsapp", "proposte", "memoria", "registro", "spesa", "impostazioni"];
 function instrada() {
   if ($("#app").hidden) return;
   let p = location.hash.replace("#", "") || "home";
@@ -159,6 +159,7 @@ function instrada() {
   $("#menu").hidden = true;
   if (p === "posta") caricaPosta();
   if (p === "whatsapp") caricaWhatsapp();
+  if (p === "proposte") caricaProposte();
   if (p === "memoria") caricaMemorie();
   if (p === "registro") caricaRegistro(true);
   if (p === "spesa") caricaSpesa();
@@ -176,6 +177,8 @@ function impostaVista(v) {
   disegnaAdesso();
   if (!$("#pagina-posta").hidden) caricaPosta();
   if (!$("#pagina-whatsapp").hidden) caricaWhatsapp();
+  if (!$("#pagina-proposte").hidden) caricaProposte();
+  caricaPerOggi();
 }
 document.querySelectorAll("[data-vista]").forEach((b) => b.addEventListener("click", () => impostaVista(b.dataset.vista)));
 
@@ -184,6 +187,7 @@ async function caricaBriefing() {
   try {
     stato.briefing = await api("/api/briefing");
     disegnaAdesso();
+    caricaPerOggi();
     $("#avvisiBriefing").textContent = stato.briefing.avvisi.join(" · ");
   } catch (e) {
     if (e instanceof NonAutenticato) return mostraAccesso();
@@ -212,6 +216,7 @@ $("#leggiBriefing").addEventListener("click", () => {
   if (!stato.briefing) return;
   voce.stop();
   for (const r of stato.briefing.righe) { voce.di(r.testo); aggiungiBattuta("jarvis", r.testo); }
+  for (const t of stato.perOggi?.righe ?? []) { voce.di(t); aggiungiBattuta("jarvis", t); }
 });
 
 // ------------------------------------------------------------------ conversazione
@@ -377,6 +382,11 @@ const NOMI_AZIONI = {
   "whatsapp.risposta": "Risposta WhatsApp preparata", "whatsapp.invio": "Messaggio WhatsApp mandato", "whatsapp.assegna": "Azienda di un contatto WhatsApp",
   "whatsapp.azienda": "Azienda di un contatto WhatsApp", "whatsapp.conferma_automatica": "Conferma automatica WhatsApp", "whatsapp.webhook": "Webhook WhatsApp",
   "whatsapp.storico": "Storico WhatsApp", "whatsapp.pulizia": "Pulizia WhatsApp (30 giorni)", "whatsapp.account": "Account WhatsApp", "notifica.whatsapp": "Notifica WhatsApp",
+  "proposta.prepara": "Proposta per Costructo preparata", "proposta.invio": "Proposta mandata a Costructo", "proposta.correggi": "Proposta corretta",
+  "proposta.scarta": "Proposta scartata", "proposta.stato": "Stato delle proposte da Costructo", "costructo.proposta": "Proposta per Costructo",
+  "proposta.leggi": "Lettura delle proposte", "ricerca.leggi": "Ricerca unica", "whatsapp.vocale": "Vocale trascritto", "whatsapp.allegato": "Allegato WhatsApp scaricato",
+  "whatsapp.operaio": "Operaio di un contatto WhatsApp", "whatsapp.promessa": "Promessa in chat", "whatsapp.scontrino": "Scontrino (solo in Jarvis)",
+  "whatsapp.modello": "Promemoria con modello Meta", "funzioni.analisi": "Analisi dei messaggi", "funzioni.estrazione": "Estrazione con l'AI", "funzioni.pulizia": "Pulizia funzioni (30 giorni)",
 };
 const NOMI_ESITI = { fatto: "Fatto", negato: "Bloccato", errore: "Errore", richiesta_conferma: "In attesa di conferma" };
 const NOMI_ORIGINI = { luigi: "da te", jarvis: "da Jarvis", sistema: "dal sistema" };
@@ -449,6 +459,7 @@ async function caricaImpostazioni() {
     caricaCaselle();
     caricaApple();
     caricaWaImpostazioni();
+    caricaFunzioniImpostazioni();
   } catch (e) { if (e instanceof NonAutenticato) mostraAccesso(); }
 }
 function riempiVoci(scelta) {
@@ -922,9 +933,18 @@ async function riempiChat(id, box, aziende) {
     if (m.testo) li.append(crea("p", "wa-testo", m.testo));
     if (m.allegato) li.append(crea("p", "posta-meta", `Allegato: ${NOMI_ALLEGATI[m.allegato.tipo] || m.allegato.tipo}${m.allegato.nomeFile ? ` «${m.allegato.nomeFile}»` : ""} (aprilo dal telefono)`));
     if (m.erroreInvio) li.append(crea("p", "esito male", m.erroreInvio));
+    if (m.vicino) li.append(crea("p", "posta-meta", `Vicino al cantiere ${m.vicino.cantiere} (${m.vicino.metri} m)`));
+    else if (m.cantiere) li.append(crea("p", "posta-meta", `Cantiere: ${m.cantiere}`));
+    if (m.proposte?.length) {
+      const et = crea("span", "etichette");
+      for (const x of m.proposte) et.append(crea("span", "etichetta proposta", `Proposta: ${NOMI_TIPI_BREVI[x.tipo] || x.tipo}`));
+      li.append(et);
+    }
+    if (!d.contatto.gruppo && m.direzione !== "out" && !m.automatico) li.append(azioneProponi(d, m));
     lista.append(li);
   }
   box.append(lista);
+  if (d.contatto.spazio === "privato") box.append(spuntaEsclusa(d));
   // Risposte proposte o in bozza
   for (const r of d.risposte) box.append(schedaRisposta(d, r, () => riempiChat(id, box, aziende)));
   // Cambiare l'azienda del contatto
@@ -1372,6 +1392,510 @@ function base64aByte(b64) {
   const s = atob((b64 + "=".repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/"));
   return Uint8Array.from(s, (c) => c.charCodeAt(0));
 }
+
+// ------------------------------------------------------------------ Fase 3b: proposte per Costructo, «Per oggi», ricerca, rubrica
+// Regola di Luigi: Jarvis non scrive mai record definitivi in Costructo. Prepara proposte: Luigi vede il testo completo,
+// conferma qui («Sì, manda») e approva in Costructo. Le cose private restano nell'agenda di Jarvis.
+const NOMI_TIPI_BREVI = { ore: "ore", foto: "foto", rinnovo_documento: "rinnovo documento", carico_magazzino: "consegna", richiesta_lavoro: "richiesta di lavoro", agenda: "appuntamento", contatto: "telefono", documento_fornitore: "documento fornitore", diario: "diario", invio_documenti: "invio documenti", agenda_privata: "promemoria privato" };
+const NOMI_STATI_PROPOSTA = { da_confermare: "Da confermare", errore: "Non partita", attesa_costructo: "In attesa della pagina Proposte in Costructo", inviata: "Mandata", gia_presente: "Già presente in Costructo", in_invio: "In invio" };
+const NOMI_STATI_COSTRUCTO = { in_attesa: "da approvare in Costructo", accettata: "accettata in Costructo", scartata: "scartata in Costructo", superata: "superata in Costructo" };
+const CONFERMABILI = ["da_confermare", "errore", "attesa_costructo"];
+stato.scelteProposte = new Map();
+stato.perOggi = null;
+const dataBreve = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d || "") ? `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}` : d || "");
+
+async function caricaProposte() {
+  try {
+    const d = await api(`/api/proposte?vista=${stato.vista}`);
+    disegnaProposte(d);
+  } catch (e) {
+    if (e instanceof NonAutenticato) return mostraAccesso();
+    $("#propGruppi").replaceChildren(crea("p", "vuoto", "Le proposte non sono disponibili in questo momento."));
+  }
+  caricaDomandeOperai();
+  caricaRubrica();
+  caricaScontrini();
+  $("#rigaCercaPrivato").hidden = stato.vista !== "tutto";
+}
+function aggiornaPulsanteLotto() {
+  const n = stato.scelteProposte.size;
+  $("#propMandaScelte").disabled = n === 0;
+  $("#propMandaScelte").textContent = n ? `Manda le ${n} proposte scelte` : "Manda le proposte scelte";
+}
+function disegnaProposte(d) {
+  stato.scelteProposte.clear();
+  aggiornaPulsanteLotto();
+  $("#propConfermaLotto").replaceChildren();
+  const contenitore = $("#propGruppi");
+  contenitore.replaceChildren();
+  if (!d.proposte.length) { contenitore.append(crea("p", "vuoto", "Nessuna proposta. Quando su WhatsApp arrivano ore, foto, documenti o appuntamenti, le trovi qui.")); return; }
+  const gruppi = [
+    { titolo: "Da confermare", stati: ["da_confermare", "errore", "in_invio"] },
+    { titolo: "In attesa della pagina Proposte in Costructo", stati: ["attesa_costructo"] },
+    { titolo: "Mandate", stati: ["inviata"] },
+    { titolo: "Già presenti in Costructo", stati: ["gia_presente"] },
+  ];
+  for (const g of gruppi) {
+    const qui = d.proposte.filter((p) => g.stati.includes(p.stato));
+    if (!qui.length) continue;
+    const sezione = crea("section", "gruppo-proposte");
+    sezione.append(crea("h2", "", `${g.titolo} (${qui.length})`));
+    const lista = crea("ul", "lista-posta");
+    for (const p of qui.sort((a, b) => a.nomeAzienda.localeCompare(b.nomeAzienda, "it") || b.creata - a.creata)) lista.append(schedaProposta(p));
+    sezione.append(lista);
+    contenitore.append(sezione);
+  }
+}
+function schedaProposta(p) {
+  const li = crea("li", `proposta ${p.azienda === "privato" ? "privato" : "lavoro"}${p.completa ? "" : " incompleta"}`);
+  li.id = `proposta-${p.id}`;
+  const testa = crea("div", "posta-testa");
+  testa.append(crea("b", "posta-oggetto", p.titolo));
+  const et = crea("span", "etichette");
+  et.append(crea("span", "etichetta", p.nomeTipo));
+  et.append(crea("span", `etichetta ${p.stato === "gia_presente" ? "attesa" : ""}`, NOMI_STATI_PROPOSTA[p.stato] || p.stato));
+  if (p.statoCostructo) et.append(crea("span", "etichetta", NOMI_STATI_COSTRUCTO[p.statoCostructo] || p.statoCostructo));
+  if (!p.completa && CONFERMABILI.includes(p.stato)) et.append(crea("span", "etichetta urgente", "Da completare"));
+  if (p.automatica) et.append(crea("span", "etichetta", "Mandata in automatico"));
+  testa.append(et);
+  li.append(testa, crea("small", "posta-meta", `${p.nomeAzienda} · ${quando(p.creata)}`));
+  const testo = crea("pre", "testo-completo", p.testoCompleto);
+  testo.setAttribute("aria-label", `Testo completo della proposta: ${p.titolo}`);
+  li.append(testo);
+  if (p.allegati.length) {
+    const box = crea("div", "miniature");
+    p.allegati.forEach((a, n) => {
+      const url = `/api/proposte/${encodeURIComponent(p.id)}/allegato/${n}`;
+      if (a.mime.startsWith("image/") && a.mime !== "image/heic") { const img = crea("img"); img.src = url; img.alt = `Allegato: ${a.nome}`; img.loading = "lazy"; box.append(img); }
+      else { const l = crea("a", "", `Apri ${a.nome}`); l.href = url; l.target = "_blank"; l.rel = "noopener noreferrer"; box.append(l); }
+    });
+    li.append(box);
+  }
+  if (p.mancano.length && CONFERMABILI.includes(p.stato)) li.append(crea("p", "esito male", `Da completare prima di confermare: ${p.mancano.join(", ")}.`));
+  if (p.esito && p.stato !== "da_confermare") li.append(crea("p", p.stato === "errore" ? "esito male" : "posta-meta", p.esito));
+  if (p.motivoCostructo) li.append(crea("p", "posta-meta", `Costructo: ${p.motivoCostructo}`));
+  if (!CONFERMABILI.includes(p.stato)) return li;
+  const zona = crea("div", "zona-bozza");
+  const esito = crea("p", "esito"); esito.setAttribute("role", "status");
+  const azioni = crea("div", "azioni-modulo");
+  const scegli = crea("label", "spunta");
+  const spunta = crea("input"); spunta.type = "checkbox"; spunta.disabled = !p.completa;
+  spunta.addEventListener("change", () => { if (spunta.checked) stato.scelteProposte.set(p.id, p); else stato.scelteProposte.delete(p.id); aggiornaPulsanteLotto(); });
+  scegli.append(spunta, document.createTextNode(" Scegli"));
+  const manda = crea("button", "primario", p.perCostructo ? "Manda a Costructo" : "Segna nell'agenda privata"); manda.type = "button"; manda.disabled = !p.completa;
+  const correggi = crea("button", "secondario", "Correggi"); correggi.type = "button";
+  const scarta = crea("button", "secondario", "Scarta"); scarta.type = "button";
+  manda.setAttribute("aria-label", `${manda.textContent}: ${p.titolo}`);
+  manda.addEventListener("click", () => chiediConfermaProposte([p], zona, esito));
+  correggi.addEventListener("click", () => apriCorrezione(p, zona, esito));
+  scarta.addEventListener("click", async () => {
+    if (!confirm("Scartare questa proposta? In Costructo non arriva niente.")) return;
+    try { await api(`/api/proposte/${encodeURIComponent(p.id)}`, { metodo: "DELETE" }); caricaProposte(); } catch (e) { esito.className = "esito male"; esito.textContent = e.message; }
+  });
+  azioni.append(scegli, manda, correggi, scarta);
+  li.append(azioni, zona, esito);
+  return li;
+}
+/** Conferma esplicita: il testo COMPLETO di ogni proposta, poi «Sì, manda». Si mandano le impronte di quello che si è visto. */
+function chiediConfermaProposte(lista, zona, esito) {
+  zona.querySelector(".conferma-proposte")?.remove();
+  const box = crea("div", "conferma conferma-proposte");
+  box.setAttribute("role", "group");
+  const perCostructo = lista.some((p) => p.perCostructo);
+  box.append(crea("p", "", lista.length === 1
+    ? (perCostructo ? "Mando questa proposta a Costructo? Resta una bozza: la approvi tu in Costructo." : "Segno questo promemoria nell'agenda privata di Jarvis?")
+    : `Mando queste ${lista.length} proposte? Quelle per Costructo restano bozze da approvare in Costructo; quelle private vanno nell'agenda di Jarvis.`));
+  for (const [n, p] of lista.entries()) box.append(crea("pre", "testo-completo", `${lista.length > 1 ? `${n + 1}) ` : ""}${p.testoCompleto}`));
+  const azioni = crea("div", "azioni");
+  const si = crea("button", "primario", lista.length === 1 ? "Sì, manda" : `Sì, manda tutte e ${lista.length}`); si.type = "button";
+  const no = crea("button", "secondario", "Annulla"); no.type = "button";
+  no.addEventListener("click", () => box.remove());
+  si.addEventListener("click", async () => {
+    si.disabled = true; no.disabled = true;
+    try {
+      const r = await api("/api/proposte/manda", { metodo: "POST", corpo: { conferma: true, voci: lista.map((p) => ({ id: p.id, impronta: p.impronta })) } });
+      esito.className = r.esiti.every((x) => x.ok) ? "esito" : "esito male"; esito.textContent = r.messaggio;
+      setTimeout(caricaProposte, 1500);
+    } catch (e) { if (e instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = e.message; }
+    box.remove();
+  });
+  azioni.append(si, no);
+  box.append(azioni);
+  zona.append(box);
+  si.focus();
+}
+$("#propMandaScelte").addEventListener("click", () => {
+  const lista = [...stato.scelteProposte.values()];
+  if (lista.length) chiediConfermaProposte(lista, $("#propConfermaLotto"), $("#propStato"));
+});
+$("#propAggiornaStati").addEventListener("click", async () => {
+  try { const r = await api("/api/proposte/aggiorna-stati", { metodo: "POST", corpo: {} }); $("#propStato").className = "esito"; $("#propStato").textContent = r.messaggio; caricaProposte(); }
+  catch (e) { if (e instanceof NonAutenticato) return mostraAccesso(); $("#propStato").className = "esito male"; $("#propStato").textContent = e.message; }
+});
+async function apriCorrezione(p, zona, esito) {
+  zona.querySelector(".correzione")?.remove();
+  const modulo = crea("form", "sottomodulo correzione");
+  let scelte = { cantieri: [], operai: [] };
+  if (p.campi.some((c) => c.tipo === "cantiere" || c.tipo === "operaio")) { try { scelte = await api(`/api/proposte/${encodeURIComponent(p.id)}/scelte`); } catch { /* restano vuote */ } }
+  const campi = [];
+  for (const c of p.campi) {
+    if (c.tipo === "sola_lettura") continue;
+    const id = `corr-${p.id}-${c.chiave}`;
+    const etichetta = crea("label", "", `${c.etichetta}${c.obbligatorio ? " (obbligatorio)" : ""}`);
+    etichetta.htmlFor = id;
+    let el;
+    const valore = p.dati[c.chiave];
+    if (c.tipo === "cantiere" || c.tipo === "operaio" || c.tipo === "scelta") {
+      el = crea("select");
+      const opzioni = c.tipo === "cantiere" ? scelte.cantieri : c.tipo === "operaio" ? scelte.operai : (c.opzioni || []).map((x) => ({ id: x, nome: x }));
+      el.append(Object.assign(crea("option", "", "—"), { value: "" }));
+      for (const o of opzioni) { const op = crea("option", "", o.nome); op.value = o.id; if (String(valore ?? "") === String(o.id)) op.selected = true; el.append(op); }
+    } else if (c.tipo === "testo_lungo" || c.tipo === "righe") {
+      el = crea("textarea", "testo-bozza"); el.rows = 4;
+      el.value = c.tipo === "righe" ? (Array.isArray(valore) ? valore.map((r) => `${r.quantita} ${r.unita} ${r.descrizione}`).join("\n") : "") : (valore ?? "");
+    } else {
+      el = crea("input");
+      el.type = c.tipo === "numero" ? "number" : c.tipo === "data" ? "date" : c.tipo === "ora" ? "time" : "text";
+      if (c.tipo === "numero") el.step = "0.5";
+      el.value = valore ?? "";
+    }
+    el.id = id;
+    etichetta.append(el);
+    modulo.append(etichetta);
+    campi.push({ c, el });
+  }
+  const azioni = crea("div", "azioni-modulo");
+  const salva = crea("button", "primario", "Salva le correzioni"); salva.type = "submit";
+  const annulla = crea("button", "secondario", "Annulla"); annulla.type = "button";
+  annulla.addEventListener("click", () => modulo.remove());
+  azioni.append(salva, annulla);
+  modulo.append(azioni);
+  modulo.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const dati = {}, nomi = {};
+    for (const { c, el } of campi) {
+      const v = el.value.trim();
+      if (c.tipo === "numero") dati[c.chiave] = v === "" ? null : Number(v.replace(",", "."));
+      else if (c.tipo === "righe") dati[c.chiave] = v ? v.split("\n").map((r) => /^\s*(\d+(?:[.,]\d+)?)\s+(\S+)\s+(.+)$/.exec(r)).filter(Boolean).map((m) => ({ quantita: Number(m[1].replace(",", ".")), unita: m[2], descrizione: m[3].trim() })) : null;
+      else dati[c.chiave] = v || null;
+      if ((c.tipo === "cantiere" || c.tipo === "operaio") && v) nomi[c.chiave] = el.selectedOptions[0]?.textContent || "";
+    }
+    try { await api(`/api/proposte/${encodeURIComponent(p.id)}`, { metodo: "PATCH", corpo: { dati, nomi } }); caricaProposte(); }
+    catch (err) { if (err instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = err.message; }
+  });
+  zona.append(modulo);
+  modulo.querySelector("input, select, textarea")?.focus();
+}
+async function caricaDomandeOperai() {
+  const box = $("#propDomande");
+  try {
+    const domande = stato.vista === "privato" ? [] : await api("/api/funzioni/operai/domande");
+    box.replaceChildren();
+    $("#propSezioneDomande").hidden = !domande.length;
+    for (const q of domande) {
+      const s = crea("section", "conferma domanda-operaio");
+      s.setAttribute("aria-label", q.domanda);
+      s.append(crea("p", "", q.domanda));
+      if (q.errore) s.append(crea("p", "esito male", q.errore));
+      const azioni = crea("div", "azioni");
+      const rispondi = async (operaioId) => {
+        azioni.querySelectorAll("button").forEach((b) => (b.disabled = true));
+        try { const r = await api(`/api/funzioni/operai/domande/${encodeURIComponent(q.id)}`, { metodo: "POST", corpo: { operaioId } }); $("#propStato").className = "esito"; $("#propStato").textContent = r.messaggio; caricaProposte(); }
+        catch (e) { s.append(crea("p", "esito male", e.message)); azioni.querySelectorAll("button").forEach((b) => (b.disabled = false)); }
+      };
+      for (const o of q.operai) { const b = crea("button", o.id === q.suggerito ? "primario" : "secondario", o.nome); b.type = "button"; b.addEventListener("click", () => rispondi(o.id)); azioni.append(b); }
+      const no = crea("button", "secondario", "Non è un operaio"); no.type = "button"; no.addEventListener("click", () => rispondi("")); azioni.append(no);
+      s.append(azioni);
+      box.append(s);
+    }
+  } catch (e) { if (e instanceof NonAutenticato) mostraAccesso(); }
+}
+async function caricaRubrica() {
+  const box = $("#propRubrica");
+  try {
+    const d = await api(`/api/funzioni/rubrica?vista=${stato.vista}`);
+    box.replaceChildren();
+    if (stato.vista === "privato") { box.append(crea("p", "vuoto", "La rubrica riguarda le aziende: apri la scheda Lavoro o Tutto.")); return; }
+    let quanti = 0;
+    for (const a of d.aziende) {
+      const sconosciuti = a.contatti.filter((c) => c.stato === "sconosciuto" || c.stato === "non_operaio_sconosciuto");
+      if (!sconosciuti.length && !a.avviso) continue;
+      const sez = crea("section", "gruppo-proposte");
+      sez.append(crea("h3", "sottotitolo", `${a.nomeAzienda}: ${sconosciuti.length} ${sconosciuti.length === 1 ? "numero sconosciuto" : "numeri sconosciuti"}`));
+      if (a.avviso) sez.append(crea("p", "aiuto", a.avviso));
+      const ul = crea("ul", "lista-posta");
+      for (const c of sconosciuti) {
+        quanti++;
+        const li = crea("li", "voce-elenco");
+        li.append(crea("b", "", c.nome), crea("small", "posta-meta", `${c.numero} · non è tra le controparti di Costructo`));
+        if (c.proposta) { li.append(crea("p", "posta-meta", "Proposta già pronta: la trovi qui sopra.")); ul.append(li); continue; }
+        if (!c.suggerite.length) { li.append(crea("p", "aiuto", "Nessuna controparte con lo stesso nome: se serve, aggiungila in Costructo.")); ul.append(li); continue; }
+        const riga = crea("div", "azioni-modulo wa-azienda");
+        const et = crea("label", "", "Controparte ");
+        const sel = crea("select");
+        for (const s of c.suggerite) { const o = crea("option", "", s.nome); o.value = s.id; sel.append(o); }
+        et.append(sel);
+        const b = crea("button", "secondario", "Proponi il numero a Costructo"); b.type = "button";
+        const es = crea("p", "esito"); es.setAttribute("role", "status");
+        b.addEventListener("click", async () => {
+          try { const v = await api(`/api/funzioni/rubrica/${encodeURIComponent(c.id)}/proponi`, { metodo: "POST", corpo: { controparteId: sel.value } }); es.className = "esito"; es.textContent = `Proposta pronta: «${v.titolo}». Confermala qui sopra.`; caricaProposte(); }
+          catch (e) { es.className = "esito male"; es.textContent = e.message; }
+        });
+        riga.append(et, b);
+        li.append(riga, es);
+        ul.append(li);
+      }
+      sez.append(ul);
+      box.append(sez);
+    }
+    if (!quanti && !box.childElementCount) box.append(crea("p", "vuoto", "Tutti i contatti delle aziende sono in Costructo (o sono operai)."));
+  } catch (e) { if (e instanceof NonAutenticato) mostraAccesso(); else box.replaceChildren(crea("p", "vuoto", "Rubrica non disponibile in questo momento.")); }
+}
+async function caricaScontrini() {
+  const ul = $("#propScontrini");
+  try {
+    const d = await api(`/api/funzioni/scontrini?vista=${stato.vista}`);
+    ul.replaceChildren();
+    if (!d.scontrini.length) { ul.append(crea("li", "vuoto", "Nessuno scontrino arrivato.")); return; }
+    for (const s of d.scontrini) {
+      const li = crea("li", "voce-elenco");
+      li.append(crea("b", "", s.descrizione || "Scontrino"), crea("small", "posta-meta", `${s.nomeAzienda} · da ${s.contatto} · ${quando(s.creato)}${s.conFoto ? " · foto salvata in Jarvis" : ""}`));
+      ul.append(li);
+    }
+  } catch (e) { if (e instanceof NonAutenticato) mostraAccesso(); }
+}
+$("#formCerca").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = $("#cercaTesto").value.trim();
+  if (!q) return;
+  const ul = $("#cercaRisultati"), st = $("#cercaStato");
+  try {
+    const r = await api(`/api/funzioni/cerca?q=${encodeURIComponent(q)}&vista=${stato.vista}${stato.vista === "tutto" && $("#cercaPrivato").checked ? "&privato=1" : ""}`);
+    ul.replaceChildren();
+    st.className = "esito";
+    st.textContent = r.domanda || `${r.risultati.length ? `${r.risultati.length} risultati` : "Nessun risultato"}${r.privatoIncluso ? " (anche nel privato)" : ""}.${r.avvisi.length ? ` ${r.avvisi.join(" · ")}` : ""}`;
+    for (const x of r.risultati) {
+      const li = crea("li", `voce-elenco ${x.spazio === "privato" ? "privato" : ""}`);
+      li.append(crea("b", "", x.titolo), crea("small", "posta-meta", `${x.spazio === "privato" ? "Privato" : x.azienda}${x.quando ? ` · ${quando(x.quando)}` : ""}`));
+      if (x.estratto) li.append(crea("p", "posta-riassunto", x.estratto));
+      ul.append(li);
+    }
+  } catch (err) { if (err instanceof NonAutenticato) return mostraAccesso(); st.className = "esito male"; st.textContent = err.message; }
+});
+
+// «Proponi in Costructo» su un messaggio della pagina WhatsApp: si sceglie il tipo, Jarvis prepara la proposta (non la manda).
+function azioneProponi(d, m) {
+  const box = crea("div", "proponi-messaggio");
+  const apri = crea("button", "link", d.contatto.spazio === "privato" ? "Segna come promemoria" : "Proponi in Costructo");
+  apri.type = "button";
+  apri.setAttribute("aria-expanded", "false");
+  const zona = crea("div", "azioni-modulo");
+  zona.hidden = true;
+  const sel = crea("select");
+  sel.setAttribute("aria-label", "Tipo di proposta");
+  const tipi = d.contatto.spazio === "privato" ? ["agenda_privata"] : ["ore", "foto", "documento_fornitore", "rinnovo_documento", "carico_magazzino", "richiesta_lavoro", "agenda", "diario"];
+  for (const t of tipi) { const o = crea("option", "", NOMI_TIPI_BREVI[t] || t); o.value = t; sel.append(o); }
+  const vai = crea("button", "secondario", "Prepara"); vai.type = "button";
+  const esito = crea("p", "esito"); esito.setAttribute("role", "status");
+  apri.addEventListener("click", () => { zona.hidden = !zona.hidden; apri.setAttribute("aria-expanded", String(!zona.hidden)); });
+  vai.addEventListener("click", async () => {
+    try {
+      const v = await api("/api/proposte/da-messaggio", { metodo: "POST", corpo: { messaggioId: m.id, tipo: sel.value } });
+      esito.className = "esito"; esito.replaceChildren(document.createTextNode(`Proposta pronta, non ancora mandata: «${v.titolo}». `));
+      const l = crea("a", "", "Vai alle Proposte"); l.href = "#proposte"; esito.append(l);
+    } catch (e) { if (e instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = e.message; }
+  });
+  zona.append(sel, vai);
+  box.append(apri, zona, esito);
+  return box;
+}
+function spuntaEsclusa(d) {
+  const l = crea("label", "spunta");
+  const c = crea("input"); c.type = "checkbox"; c.checked = !!d.esclusa;
+  const es = crea("span", "aiuto");
+  c.addEventListener("change", async () => {
+    try { await api(`/api/funzioni/chat-escluse/${encodeURIComponent(d.contatto.id)}`, { metodo: "PUT", corpo: { escludi: c.checked } }); es.textContent = c.checked ? " Esclusa." : " Di nuovo inclusa."; }
+    catch (e) { c.checked = !c.checked; es.textContent = ` ${e.message}`; }
+  });
+  l.append(c, document.createTextNode(" Escludi questa chat dalle funzioni private (promemoria, compleanni, vocali)"), es);
+  return l;
+}
+
+// «Per oggi», azienda per azienda: i testi pronti si aprono in WhatsApp sul tuo telefono (link wa.me): li mandi tu.
+async function caricaPerOggi() {
+  const box = $("#perOggi");
+  try { stato.perOggi = await api(`/api/funzioni/briefing?vista=${stato.vista}`); disegnaPerOggi(stato.perOggi); }
+  catch (e) { if (e instanceof NonAutenticato) return mostraAccesso(); box.replaceChildren(crea("p", "vuoto", "Non disponibile in questo momento.")); }
+}
+function testoPronto(t, modelliAttivi) {
+  const li = crea("li", "testo-pronto");
+  li.append(crea("b", "", t.titolo), crea("p", "anteprima-pronta", t.testo));
+  const azioni = crea("div", "azioni-modulo");
+  if (t.link) {
+    const a = crea("a", "pulsante-link", `Apri WhatsApp con il testo (${t.numero})`);
+    a.href = t.link; a.target = "_blank"; a.rel = "noopener noreferrer";
+    azioni.append(a);
+  } else azioni.append(crea("span", "aiuto", t.nota || ""));
+  const copia = crea("button", "secondario", "Copia il testo"); copia.type = "button";
+  copia.addEventListener("click", async () => { try { await navigator.clipboard.writeText(t.testo); copia.textContent = "Copiato"; } catch { copia.textContent = "Non riesco a copiare"; } });
+  azioni.append(copia);
+  if (modelliAttivi && t.telefono) {
+    const b = crea("button", "secondario", "Manda con il modello di Meta"); b.type = "button";
+    b.addEventListener("click", () => confermaModello(t, li));
+    azioni.append(b);
+  }
+  li.append(azioni, crea("small", "aiuto", "Jarvis non lo manda: lo mandi tu dal telefono."));
+  return li;
+}
+async function confermaModello(t, li) {
+  li.querySelector(".conferma")?.remove();
+  const nome = prompt("Nome del modello approvato da Meta (per esempio promemoria_appuntamento):", "promemoria_appuntamento");
+  if (!nome) return;
+  const corpo = { telefono: t.telefono, nome: nome.trim(), lingua: "it", parametri: [t.titolo.split(" · ")[0]] };
+  const box = crea("div", "conferma"); box.setAttribute("role", "group");
+  try {
+    const pr = await api("/api/funzioni/modello/prepara", { metodo: "POST", corpo });
+    box.append(crea("p", "", "Mando questo promemoria con il modello? Parte subito."), crea("p", "anteprima-pronta", pr.anteprima));
+    const si = crea("button", "primario", "Sì, manda"); si.type = "button";
+    const no = crea("button", "secondario", "Annulla"); no.type = "button";
+    no.addEventListener("click", () => box.remove());
+    si.addEventListener("click", async () => {
+      si.disabled = true;
+      try { const r = await api("/api/funzioni/modello/invia", { metodo: "POST", corpo: { ...corpo, conferma: true, id: pr.id, impronta: pr.impronta } }); box.replaceChildren(crea("p", "esito", r.messaggio)); }
+      catch (e) { box.replaceChildren(crea("p", "esito male", e.message)); }
+    });
+    const az = crea("div", "azioni"); az.append(si, no); box.append(az);
+  } catch (e) { box.append(crea("p", "esito male", e.message)); }
+  li.append(box);
+}
+function disegnaPerOggi(d) {
+  const box = $("#perOggi");
+  box.replaceChildren();
+  const blocco = (titolo, voci, fn) => {
+    if (!voci?.length) return null;
+    const s = crea("div", "blocco-oggi");
+    s.append(crea("h4", "", titolo));
+    const ul = crea("ul", "lista-oggi");
+    for (const v of voci) ul.append(fn(v));
+    s.append(ul);
+    return s;
+  };
+  const semplice = (t) => crea("li", "", t);
+  const promessa = (p) => {
+    const li = crea("li", p.scaduta ? "scaduta" : "");
+    li.append(document.createTextNode(`${p.scaduta ? "Non mantenuta" : "Entro oggi"}: a ${p.contatto} hai scritto «${p.cosa}». `));
+    const b = crea("button", "link", "Fatta"); b.type = "button";
+    b.addEventListener("click", async () => { try { await api(`/api/funzioni/promesse/${encodeURIComponent(p.id)}/chiudi`, { metodo: "POST", corpo: {} }); li.remove(); } catch { /* resta */ } });
+    li.append(b);
+    return li;
+  };
+  let qualcosa = false;
+  for (const a of d.aziende) {
+    const parti = [
+      blocco("Aspettano una risposta", a.aspettano, (x) => semplice(`${x.contatto} (dal ${quando(x.daQuando)})`)),
+      blocco("Promesse", a.promesse, promessa),
+      blocco("Solleciti pronti (fatture scadute)", a.solleciti, (t) => testoPronto(t, false)),
+      blocco("Preventivi senza risposta", a.preventivi, (t) => testoPronto(t, false)),
+      blocco("Appuntamenti di domani: promemoria per i clienti", a.appuntamentiDomani, (t) => testoPronto(t, d.modelliAttivi)),
+      blocco(`Cantieri del ${dataBreve(d.giornoCantieri)}`, a.cantieri, (c) => {
+        const li = crea("li", "");
+        li.append(crea("b", "", c.nome), document.createTextNode(` · ${[c.messaggi ? `${c.messaggi} messaggi` : "", c.foto ? `${c.foto} foto` : "", c.mail ? `${c.mail} mail` : "", c.proposte ? `${c.proposte} proposte` : "", c.impegni ? `${c.impegni} impegni` : ""].filter(Boolean).join(", ")}`));
+        for (const f of c.frasi) li.append(crea("small", "posta-meta blocco", f));
+        const b = crea("button", "link", "Prepara il diario"); b.type = "button";
+        const es = crea("span", "aiuto");
+        b.addEventListener("click", async () => {
+          try { const v = await api("/api/proposte/diario", { metodo: "POST", corpo: { azienda: a.id, cantiereId: c.cantiereId, data: d.giornoCantieri } }); es.textContent = ` Bozza pronta in Proposte: «${v.titolo}».`; }
+          catch (e) { es.textContent = ` ${e.message}`; }
+        });
+        li.append(b, es);
+        return li;
+      }),
+    ].filter(Boolean);
+    if (!parti.length && !a.proposte && !a.avvisi.length) continue;
+    qualcosa = true;
+    const s = crea("section", "azienda-oggi lavoro");
+    const h = crea("h3", "", a.nome);
+    if (a.proposte) { const l = crea("a", "conteggio-attesa", `${a.proposte} ${a.proposte === 1 ? "proposta" : "proposte"} da confermare`); l.href = "#proposte"; h.append(l); }
+    s.append(h, ...parti);
+    for (const av of a.avvisi) s.append(crea("p", "aiuto", av));
+    box.append(s);
+  }
+  if (d.privato && (d.privato.aspettano.length || d.privato.promesse.length || d.privato.promemoria)) {
+    qualcosa = true;
+    const s = crea("section", "azienda-oggi privato");
+    const h = crea("h3", "", "Privato");
+    if (d.privato.promemoria) { const l = crea("a", "conteggio-attesa", `${d.privato.promemoria} promemoria da confermare`); l.href = "#proposte"; h.append(l); }
+    s.append(h, ...[blocco("Aspettano una risposta", d.privato.aspettano, (x) => semplice(`${x.contatto} (dal ${quando(x.daQuando)})`)), blocco("Promesse", d.privato.promesse, promessa)].filter(Boolean));
+    box.append(s);
+  }
+  if (!qualcosa) box.append(crea("p", "vuoto", "Niente da segnalare."));
+}
+
+// Impostazioni → funzioni WhatsApp (le chiavi della trascrizione non tornano mai: solo «impostata sì/no»)
+async function caricaFunzioniImpostazioni() {
+  try {
+    disegnaFunzioniImpostazioni(await api("/api/funzioni/impostazioni"));
+    const operai = await api("/api/funzioni/operai");
+    const ul = $("#funOperai");
+    ul.replaceChildren();
+    if (!operai.length) ul.append(crea("li", "vuoto", "Nessun contatto ancora indicato."));
+    for (const o of operai) {
+      const li = crea("li");
+      li.append(crea("span", "", `${o.nomeContatto} (${o.nomeAzienda}): ${o.nomeOperaio}`));
+      const b = crea("button", "secondario", "Dimentica"); b.type = "button"; b.setAttribute("aria-label", `Dimentica: ${o.nomeContatto}`);
+      b.addEventListener("click", async () => { await api(`/api/funzioni/operai/${encodeURIComponent(o.contatto)}?azienda=${encodeURIComponent(o.azienda)}`, { metodo: "DELETE" }).catch(() => {}); caricaFunzioniImpostazioni(); });
+      li.append(b);
+      ul.append(li);
+    }
+  } catch (e) { if (e instanceof NonAutenticato) mostraAccesso(); }
+}
+function disegnaFunzioniImpostazioni(d) {
+  stato.funzioni = d;
+  $("#funScarica").checked = d.scaricaAllegati;
+  $("#funTrascrizione").value = d.trascrizione.fornitore;
+  $("#funChiaveGoogle").value = ""; $("#funChiaveOpenai").value = "";
+  $("#funChiaveGoogleStato").textContent = `Impostata: ${d.trascrizione.chiaveImpostata.google ? "sì" : "no"}.`;
+  $("#funChiaveOpenaiStato").textContent = `Impostata: ${d.trascrizione.chiaveImpostata.openai ? "sì" : "no"}.`;
+  const l = d.trascrizione.listino;
+  $("#funCosti").textContent = `Costi indicativi: Google circa ${l.google.alMinuto.toLocaleString("it-IT")} $ al minuto (${l.google.nota}); OpenAI circa ${l.openai.alMinuto.toLocaleString("it-IT")} $ al minuto (${l.openai.nota}). Questo mese: ${d.trascrizione.spesaMese.richieste} vocali, ${d.trascrizione.spesaMese.spesaUsd.toLocaleString("it-IT", { style: "currency", currency: "USD", maximumFractionDigits: 3 })}. Contano nel tetto di spesa. L'audio non viene mai salvato.`;
+  const auto = $("#funAutomatiche");
+  auto.replaceChildren();
+  for (const t of d.tipi) {
+    const lab = crea("label", "spunta");
+    const c = crea("input"); c.type = "checkbox"; c.value = t.tipo; c.checked = d.proposteAutomatiche.includes(t.tipo);
+    lab.append(c, document.createTextNode(` ${t.nome}`));
+    auto.append(lab);
+  }
+  $("#funGiorni").value = d.giorniPreventiviInAttesa;
+  $("#funModelli").checked = d.modelliAttivi;
+  const ul = $("#funEscluse");
+  ul.replaceChildren();
+  if (!d.chatEscluse.length) ul.append(crea("li", "vuoto", "Nessuna chat esclusa. Si escludono dalla pagina WhatsApp, aprendo una chat privata."));
+  for (const c of d.chatEscluse) {
+    const li = crea("li");
+    li.append(crea("span", "", c.nome));
+    const b = crea("button", "secondario", "Riammetti"); b.type = "button"; b.setAttribute("aria-label", `Riammetti la chat con ${c.nome}`);
+    b.addEventListener("click", async () => { try { disegnaFunzioniImpostazioni(await api(`/api/funzioni/chat-escluse/${encodeURIComponent(c.id)}`, { metodo: "PUT", corpo: { escludi: false } })); } catch { /* resta */ } });
+    li.append(b);
+    ul.append(li);
+  }
+}
+$("#formFunzioni").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const esito = $("#esitoFunzioni");
+  const spunte = [...$("#funAutomatiche").querySelectorAll("input:checked")];
+  const automatiche = spunte.map((c) => c.value);
+  const nuove = spunte.filter((c) => !(stato.funzioni?.proposteAutomatiche ?? []).includes(c.value)).map((c) => c.parentElement.textContent.trim());
+  if (nuove.length && !confirm(`Queste proposte partiranno per Costructo senza chiederti la conferma: ${nuove.join(", ")}. Restano bozze da approvare in Costructo. Confermi?`)) return;
+  const corpo = {
+    scaricaAllegati: $("#funScarica").checked, trascrizioneFornitore: $("#funTrascrizione").value, proposteAutomatiche: automatiche,
+    giorniPreventiviInAttesa: Number($("#funGiorni").value) || 7, modelliAttivi: $("#funModelli").checked,
+  };
+  if ($("#funChiaveGoogle").value.trim()) corpo.chiaveGoogle = $("#funChiaveGoogle").value.trim();
+  if ($("#funChiaveOpenai").value.trim()) corpo.chiaveOpenai = $("#funChiaveOpenai").value.trim();
+  try { disegnaFunzioniImpostazioni(await api("/api/funzioni/impostazioni", { metodo: "PUT", corpo })); esito.className = "esito"; esito.textContent = "Salvato."; }
+  catch (err) { if (err instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = err.message; }
+});
 
 // ------------------------------------------------------------------ service worker (installabile come app)
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});

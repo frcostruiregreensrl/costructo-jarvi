@@ -37,6 +37,11 @@ Servizio **separato** da Costructo, con indirizzo e accesso propri. Costructo è
 | `src/rotteFase2.ts` | API di caselle, Posta, bozze e calendario Apple |
 | `src/whatsapp/` | Fase 3: webhook pubblico firmato (`webhook.ts`), forma dei webhook con zod (`schema.ts`), elaborazione (`elabora.ts`), archivio 30 giorni (`archivio.ts`), collegamento cifrato (`collegamento.ts`), invio Meta/fornitore (`invio.ts`), azienda dei contatti (`attribuzione.ts`), riassunti (`classifica.ts`), conferme automatiche (`rispostaAuto.ts`), risposte con conferma (`risposte.ts`), giro ogni minuto (`servizio.ts`), strumenti (`strumentiWhatsapp.ts`), numeri (`telefono.ts`) — vedi [FASE3.md](FASE3.md) |
 | `src/rotteWhatsapp.ts` | API della pagina WhatsApp e di Impostazioni → WhatsApp |
+| `src/proposte/` | Fase 3b: proposte per Costructo — tipi e forma dei dati (`tipi.ts`, zod), archivio con chiave doppione, testo completo e impronta (`archivio.ts`), invio con conferma, 409, attesa della pagina Proposte, stati, invii automatici (`invio.ts`) — vedi [FUNZIONI-WHATSAPP.md](FUNZIONI-WHATSAPP.md) |
+| `src/funzioni/` | Fase 3b: date in italiano, riconoscimento senza AI (`rilevatori.ts`), estrazione con Haiku (`estrai.ts`), letture di Costructo con memoria breve, operai, analisi dei messaggi nel giro (`analisi.ts`), briefing per azienda, ricerca unica FTS5, rubrica, diario, invio di documenti |
+| `src/trascrizione/` | Fase 3b: vocali con Google, OpenAI o nessuno (spenta); chiavi cifrate; costo nella spesa del mese |
+| `src/whatsapp/media.ts` | Fase 3b: scaricamento di foto, PDF e vocali dalla Cloud API (spento di serie), token solo verso Meta o il fornitore |
+| `src/rotteFunzioni.ts` | API della pagina Proposte, «Per oggi», ricerca, rubrica, operai, scontrini, Impostazioni delle funzioni, modelli di Meta |
 | `src/sicurezza/` | password (scrypt), TOTP, sessioni, limiti, cifratura, utente |
 | `public/` | PWA (`index.html`, `app.js`, `voce.js`, `api.js`, `sw.js`, manifest, icone) |
 | `public/classic/` | modalità Classic (`classic.js`, scena 3D/2D, suoni, frasi) |
@@ -71,6 +76,8 @@ Fase 2: `posta_stato` (ultimo UID e UIDVALIDITY per casella, esito dell'ultimo c
 `posta_messaggi` (30 giorni), `posta_bozze` (30 giorni), `posta_risposte_auto` (impronta del mittente + dominio, per i limiti).
 Fase 3: `wa_contatti` (numero o id utente, nomi, azienda o privato e da dove viene la scelta), `wa_messaggi` (30 giorni, id di
 WhatsApp unico: niente doppioni), `wa_risposte` (proposte, bozze, inviate), `wa_conferme_auto`, `wa_domande` («Di quale azienda è…?»).
+Fase 3b: `proposte` (chiave doppione unica), `wa_allegati` (foto e PDF, mai l'audio), `wa_analisi`, `wa_media_stato`, `wa_operai` e
+`wa_domande_operaio`, `promesse`, `scontrini`, indici di ricerca FTS5 `cerca_wa` e `cerca_posta` (tenuti allineati da trigger).
 
 ## Il giro della posta (ogni 5 minuti, un solo giro alla volta)
 
@@ -96,6 +103,16 @@ spesa + stima ricontrollate prima di ognuna.
  Luigi: «Invia» + «Sì, manda» (o «Conferma» in chat) → invio.ts → Meta (graph.facebook.com/{versione}/{id}/messages) o fornitore
 ```
 
+## Le funzioni WhatsApp nel giro (Fase 3b)
+
+```
+ giro: azienda dei contatti → vocali (trascrizione, se accesa) → foto e PDF (se lo scaricamento è acceso)
+   → classificazione → analisi dei messaggi nuovi (una volta sola ciascuno; i «da assegnare» aspettano Luigi)
+   → proposte «da confermare» / promesse / scontrini / domande «Chi è questo contatto: operaio X?»
+   → invii automatici (solo i tipi accesi da Luigi) → stato delle proposte da Costructo (ogni 15 minuti)
+ Luigi: pagina Proposte → testo completo → «Sì, manda» {conferma: true, impronta} → POST /v1/proposte
+```
+
 ## Contratto atteso da Costructo (`/api/assistente/v1`)
 
 Il modulo lo sta costruendo un altro agente sul ramo `evolution/jarvis-api` di Costructo. Il client di Jarvis è
@@ -110,7 +127,10 @@ array o dentro un oggetto. Token: `Authorization: Bearer csa_…`. Chiavi lette:
 | `GET /v1/scadenze`, `/v1/documenti-in-scadenza`, `/v1/cantieri` | liste |
 | `GET /v1/cerca?q=` | risultati (passati all'AI come dati) |
 | `GET /v1/controparti` | Fase 3: `controparti[] {telefono}` per riconoscere di quale azienda è un numero WhatsApp (letto al massimo ogni 30 minuti) |
-| `GET /v1/preventivi`, `/v1/ore`, `/v1/inventario` | previsti nel client, non ancora usati dagli strumenti |
+| `GET /v1/preventivi`, `/v1/ore`, `/v1/inventario` | Fase 3b: preventivi in attesa (`stato`, `dataInvio`), ore già presenti (`?operaioId=&data=&cantiereId=`), articoli di magazzino |
+| `GET /v1/operai`, `/v1/documenti`, `/v1/controparti?telefono=` | Fase 3b: operai `{id, nome, cognome, attivo}`, documenti `{id, tipoDocumento, ditta, azienda}`, ricerca per telefono |
+| `POST /v1/proposte` (ambito `proposte`) | Fase 3b, l'**unica scrittura**: `{tipo, chiaveDoppione, origine, rifEsterno?, titolo, dati, allegati?}` → 201/200 `{id, stato}`, 409 `{motivo}`; 404/405/403 = pagina non ancora disponibile |
+| `GET /v1/proposte/:id` | Fase 3b: `{stato: in_attesa / accettata / scartata / superata, motivo, decisoIl}` |
 
 ## Scelte per il cervello Claude
 

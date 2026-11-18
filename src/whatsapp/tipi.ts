@@ -70,6 +70,8 @@ export interface DipendenzeWhatsapp {
   attesaRiprova?: (ms: number) => Promise<void>;
   /** Risoluzione dei nomi (indirizzo del fornitore: niente rete interna). Nei test: finta. */
   risolvi?: RisolviNome;
+  /** Fase 3b: fetch verso il fornitore della trascrizione (nei test: uno finto). */
+  fetchTrascrizione?: typeof fetch;
 }
 
 export interface ContattoWa {
@@ -88,7 +90,7 @@ export interface ContattoWa {
   aggiornato: number;
 }
 
-export interface MediaWa { tipo?: string; mime?: string; nomeFile?: string; didascalia?: string; idMedia?: string }
+export interface MediaWa { tipo?: string; mime?: string; nomeFile?: string; didascalia?: string; idMedia?: string; sha256?: string; lat?: number; lon?: number }
 
 export interface MessaggioWa {
   id: string;

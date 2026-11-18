@@ -36,8 +36,18 @@ Un solo utente: Luigi.
 - Risposte preparate da Jarvis che partono **solo dopo il tuo sì**, solo entro 24 ore; mai «spunte blu», mai nei gruppi.
   Conferme automatiche spente di serie. Dati cancellati dopo 30 giorni. Dettagli e passi della parte 2: [docs/FASE3.md](docs/FASE3.md).
 
+## Cosa fa in più (Fase 3b: le 20 funzioni WhatsApp)
+
+- Jarvis **non copia Costructo e non scrive record definitivi**. Ore, foto, documenti dei fornitori, DURC, consegne,
+  richieste di lavoro, appuntamenti, diario e invio di documenti diventano **proposte** per Costructo. Luigi le conferma in
+  Jarvis (pagina **Proposte**, con il testo completo) e le approva in Costructo.
+- «Per oggi» nel briefing, azienda per azienda: chi aspetta una risposta, promesse non mantenute, solleciti e preventivi
+  in attesa, promemoria di domani (testi pronti con link wa.me che **manda Luigi**), riassunto per cantiere.
+- Ricerca unica (WhatsApp, posta e Costructo), rubrica, «Chi è questo contatto: operaio X?», vocali trascritti (spenti di serie).
+- Tutto spento di serie. Prima Nota esclusa. Dettagli: [docs/FUNZIONI-WHATSAPP.md](docs/FUNZIONI-WHATSAPP.md).
+
 Dettagli: [docs/ARCHITETTURA.md](docs/ARCHITETTURA.md), [docs/SICUREZZA.md](docs/SICUREZZA.md),
-[docs/CONSERVAZIONE.md](docs/CONSERVAZIONE.md), [docs/FASE1.md](docs/FASE1.md), [docs/AZIENDE.md](docs/AZIENDE.md), [docs/FASE2.md](docs/FASE2.md), [docs/FASE3.md](docs/FASE3.md).
+[docs/CONSERVAZIONE.md](docs/CONSERVAZIONE.md), [docs/FASE1.md](docs/FASE1.md), [docs/AZIENDE.md](docs/AZIENDE.md), [docs/FASE2.md](docs/FASE2.md), [docs/FASE3.md](docs/FASE3.md), [docs/FUNZIONI-WHATSAPP.md](docs/FUNZIONI-WHATSAPP.md).
 
 ## Avvio in locale
 
@@ -113,6 +123,7 @@ npm run check             # controllo dei tipi TypeScript
 npm run test:interfaccia  # prova Playwright a 390 e 1280 px, tema chiaro e scuro (screenshot in ./prova-foto)
 # Posta e calendario Apple si provano con server finti (IMAP, SMTP, iCloud): nessuna casella vera.
 # WhatsApp si prova con un Meta finto (test/metaFinto.ts): nessun numero vero, nessuna chiamata a Meta.
+# Le proposte si provano con la pagina Proposte finta di Costructo (test/costructoFinto.ts) e una trascrizione finta.
 ```
 
 ## Licenza

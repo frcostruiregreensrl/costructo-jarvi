@@ -4,6 +4,9 @@
 //  3) proposte di risposta «mi manda la fattura?» quando si parla di pagamenti senza documento (da confermare);
 //  4) conferme di ricezione automatiche (solo se tutte le regole lo permettono);
 //  5) notifiche dei messaggi urgenti (al massimo una ogni 30 minuti per contatto, mai il testo, mai il numero).
+// Fase 3b (le 20 funzioni): prima della classificazione i vocali (trascrizione, se accesa) e gli allegati (se lo
+// scaricamento è acceso); dopo, l'analisi dei messaggi nuovi → proposte da confermare; poi gli invii automatici dei soli
+// tipi accesi da Luigi (spenti di serie) e, ogni 15 minuti, lo stato delle proposte già mandate a Costructo.
 // I messaggi dello storico non producono mai notifiche, conferme, domande o classificazioni.
 import { registra } from "../registro.js";
 import { leggiImpostazioni } from "../impostazioni.js";
@@ -15,6 +18,8 @@ import { mandaConfermeWa } from "./rispostaAuto.js";
 import { preparaRisposta } from "./risposte.js";
 import { leggiContatto, mediaDi, nomeContatto, nomeSpazio, statoChat } from "./archivio.js";
 import { leggiCollegamento } from "./collegamento.js";
+import { giroVocali, giroAllegati, giroFunzioni, type EsitoFunzioni } from "../funzioni/analisi.js";
+import { mandaAutomatiche, aggiornaStatiProposte, recuperaBloccate } from "../proposte/invio.js";
 import { PAUSA_NOTIFICHE_MS, PRIVATO, RAGGRUPPA_MS, type ContattoWa, type DipendenzeWhatsapp, type MessaggioWa } from "./tipi.js";
 
 export const OGNI_MS = 60_000;
@@ -98,20 +103,33 @@ async function attribuisciNuovi(dip: DipendenzeWhatsapp): Promise<number> {
   return n;
 }
 
-export interface EsitoGiroWa { attribuiti: number; classifica: EsitoClassificaWa | null; proposte: number; conferme: number; notifiche: number }
+export interface EsitoGiroWa {
+  attribuiti: number; classifica: EsitoClassificaWa | null; proposte: number; conferme: number; notifiche: number;
+  vocali: number; allegati: number; funzioni: EsitoFunzioni | null; automatiche: number;
+}
+/** Ogni quanto rileggere da Costructo lo stato delle proposte mandate. */
+export const OGNI_STATI_MS = 15 * 60_000;
 
 export function creaServizioWhatsapp(dip: DipendenzeWhatsapp) {
   let giro: Promise<EsitoGiroWa> | null = null;
   let coda: Promise<unknown> = Promise.resolve();
   let prossimo: NodeJS.Timeout | null = null;
+  let ultimiStati = 0;
 
   async function faiGiro(): Promise<EsitoGiroWa> {
-    const e: EsitoGiroWa = { attribuiti: 0, classifica: null, proposte: 0, conferme: 0, notifiche: 0 };
+    const e: EsitoGiroWa = { attribuiti: 0, classifica: null, proposte: 0, conferme: 0, notifiche: 0, vocali: 0, allegati: 0, funzioni: null, automatiche: 0 };
     const passo = async (nome: string, f: () => Promise<void> | void) => {
       try { await f(); } catch (err) { registra(dip.db, nome, "errore", "sistema", { motivo: String((err as Error)?.message || err).slice(0, 200) }); }
     };
     await passo("whatsapp.azienda", async () => { e.attribuiti = await attribuisciNuovi(dip); });
+    await passo("whatsapp.vocale", async () => { e.vocali = await giroVocali(dip); });
+    await passo("whatsapp.allegato", async () => { e.allegati = await giroAllegati(dip); });
     await passo("whatsapp.classifica", async () => { e.classifica = await classificaWhatsapp(dip); });
+    await passo("funzioni.analisi", async () => { e.funzioni = await giroFunzioni(dip); });
+    await passo("proposta.invio", async () => { e.automatiche = await mandaAutomatiche(dip); });
+    const ora = dip.ora?.() ?? Date.now();
+    await passo("proposta.invio", async () => { await recuperaBloccate(dip); });
+    if (ora - ultimiStati >= OGNI_STATI_MS) { ultimiStati = ora; await passo("proposta.stato", async () => { await aggiornaStatiProposte(dip); }); }
     await passo("whatsapp.risposta", () => { e.proposte = proponiRichiesteDocumento(dip); });
     await passo("whatsapp.conferma_automatica", async () => { e.conferme = await mandaConfermeWa(dip); });
     await passo("notifica.whatsapp", async () => { e.notifiche = await notificaUrgentiWa(dip); });

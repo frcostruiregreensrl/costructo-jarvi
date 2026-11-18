@@ -21,6 +21,8 @@ export const SchemaMedia = z.object({
   mime_type: facoltativo(z.string().max(200)),
   filename: facoltativo(z.string().max(500)),
   caption: facoltativo(z.string().max(10_000)),
+  sha256: facoltativo(z.string().max(200)),
+  voice: facoltativo(z.boolean()),
 }).passthrough();
 
 const SchemaContattoProfilo = z.object({

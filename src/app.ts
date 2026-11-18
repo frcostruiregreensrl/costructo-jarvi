@@ -40,6 +40,7 @@ import { creaRotteWebhook } from "./whatsapp/webhook.js";
 import { PERCORSO_WEBHOOK, collegamentoVisibile } from "./whatsapp/collegamento.js";
 import type { DipendenzeWhatsapp } from "./whatsapp/tipi.js";
 import { montaRotteWhatsapp } from "./rotteWhatsapp.js";
+import { montaRotteFunzioni } from "./rotteFunzioni.js";
 
 export interface OpzioniApp {
   config: Config;
@@ -57,6 +58,8 @@ export interface OpzioniApp {
   fetchApple?: typeof fetch;
   /** Fase 3, solo per i test: fetch verso un Meta (o fornitore) finto per l'invio dei messaggi. */
   fetchWhatsapp?: typeof fetch;
+  /** Fase 3b, solo per i test: fetch verso un fornitore di trascrizione finto. */
+  fetchTrascrizione?: typeof fetch;
 }
 
 /** Servizi delle Fasi 2 e 3, raggiungibili da server.ts (giro della posta ogni 5 minuti, giro di WhatsApp ogni minuto). */
@@ -222,7 +225,7 @@ export function creaApp(o: OpzioniApp) {
   // tra le controparti servono quelle collegate.
   const dipWhatsapp: DipendenzeWhatsapp = {
     db, cifratore, fuso: config.fusoOrario, cervello, modello: config.modelloPredefinito, aziende: aziendePosta,
-    aziendeCostructo: aziende, invia: o.invia ?? null, fetchFn: o.fetchWhatsapp, risolvi: o.risolvi,
+    aziendeCostructo: aziende, invia: o.invia ?? null, fetchFn: o.fetchWhatsapp, risolvi: o.risolvi, fetchTrascrizione: o.fetchTrascrizione,
   };
   const servizioWhatsapp = creaServizioWhatsapp(dipWhatsapp);
   rotteWebhook = creaRotteWebhook({ db, cifratore, servizio: servizioWhatsapp, hostAmmessi });
@@ -463,6 +466,8 @@ export function creaApp(o: OpzioniApp) {
   montaRotteFase2(app, { db, posta: servizioPosta, apple: fonteApple });
   // ------------------------------------------------------------ Fase 3: pagina WhatsApp e impostazioni (il webhook pubblico è sopra)
   montaRotteWhatsapp(app, { db, whatsapp: servizioWhatsapp, origini: () => config.origineAmmessa });
+  // ------------------------------------------------------------ Fase 3b: le 20 funzioni WhatsApp (proposte per Costructo, briefing, ricerca…)
+  montaRotteFunzioni(app, { db, whatsapp: servizioWhatsapp, aziendeCostructo: aziende });
 
   app.use("/api", (_req, res) => { res.status(404).json({ errore: "Non trovato." }); });
 
