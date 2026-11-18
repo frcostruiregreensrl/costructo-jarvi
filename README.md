@@ -19,8 +19,17 @@ Un solo utente: Luigi.
 - **Calcolatrice istantanea** e **frasi rapide** senza AI (costo zero).
 - **Registro** di tutte le azioni («Cosa ha fatto») e **Spesa del mese**.
 
+## Cosa fa in più (Fase 2)
+
+- **Posta** (fino a 10 caselle: Gmail, PEC Aruba, altro server; ognuna di un'azienda o privata): legge ogni 5 minuti in
+  **sola lettura** (non segna come letto, non sposta, non cancella), riassume, segnala le urgenze, prepara **bozze** che
+  mandi tu. Pagina «Posta» divisa per azienda e privato; notifica per le mail urgenti; mail urgenti nel briefing.
+- **PEC**: solo lettura e bozze, **mai** invii. **Conferme di ricezione automatiche**: spente di serie, mai con soldi o impegni.
+- **Calendario Apple** (iCloud, sola lettura) con scelta dei calendari privati o di un'azienda.
+- Dati delle mail cancellati dopo 30 giorni. Come collegare Gmail, PEC e Apple passo per passo: [docs/FASE2.md](docs/FASE2.md).
+
 Dettagli: [docs/ARCHITETTURA.md](docs/ARCHITETTURA.md), [docs/SICUREZZA.md](docs/SICUREZZA.md),
-[docs/CONSERVAZIONE.md](docs/CONSERVAZIONE.md), [docs/FASE1.md](docs/FASE1.md), [docs/AZIENDE.md](docs/AZIENDE.md).
+[docs/CONSERVAZIONE.md](docs/CONSERVAZIONE.md), [docs/FASE1.md](docs/FASE1.md), [docs/AZIENDE.md](docs/AZIENDE.md), [docs/FASE2.md](docs/FASE2.md).
 
 ## Avvio in locale
 
@@ -63,18 +72,24 @@ azienda» e premi **Aggiungi** (fino a 5). Jarvis legge il nome dell'azienda da 
 accettato, non lo salva. I token restano sul server, cifrati. Un vecchio `COSTRUCTO_TOKEN` vale come prima azienda.
 Dettagli: [docs/AZIENDE.md](docs/AZIENDE.md).
 
-## Pacchetti da installare dopo l'autorizzazione
+## Pacchetti
 
-Luigi ha autorizzato il 17/11/2026 l'installazione di due pacchetti nuovi (vedi [docs/FASE1.md](docs/FASE1.md)).
-Sono dichiarati in `package.json` con versione esatta, ma in questa sessione **l'installazione non è stata eseguita**
-(il comando è stato bloccato dalle protezioni dell'ambiente): vanno installati con `npm install`, che crea anche `package-lock.json`.
+Tutti con versione esatta in `package.json` e `package-lock.json`; si installano con `npm install`
+(su Railway lo fa da solo prima di `npm run build`). In `dist/server.js` restano esterni (`--packages=external`).
+Fase 1 (autorizzazione del 17/11/2026, vedi [docs/FASE1.md](docs/FASE1.md)):
 
 | Pacchetto | Versione | A cosa serve | Senza il pacchetto |
 |---|---|---|---|
 | `@anthropic-ai/sdk` | 1.4.0 | cervello Claude (`src/cervello/anthropic.ts`) | Jarvis risponde «il cervello non è ancora installato»; calcolatrice, agenda, briefing e memoria funzionano |
 | `three` | 0.187.0 | grafica 3D della modalità Classic (`public/classic/scena3d.js`) | la modalità Classic usa il ripiego 2D |
 
-Dopo l'installazione: togliere `src/cervello/anthropic.ts` da `exclude` in `tsconfig.json` e rilanciare `npm run check`.
+Fase 2 (autorizzazione del 18/11/2026, vedi [docs/FASE2.md](docs/FASE2.md)), tipi già inclusi nei pacchetti:
+
+| Pacchetto | Versione | A cosa serve |
+|---|---|---|
+| `imapflow` | 2.10.0 | lettura delle caselle (IMAP) e bozze nella cartella Bozze |
+| `mailparser` | 3.14.1 | lettura del contenuto delle mail (testo, PEC, allegati solo per nome) |
+| `nodemailer` | 10.3.1 | solo conferme di ricezione automatiche (mai dalla PEC) e composizione delle bozze |
 
 ## Test
 
@@ -84,6 +99,7 @@ Tutti con dati finti e database temporanei:
 npm test                  # test del server (node:test + tsx)
 npm run check             # controllo dei tipi TypeScript
 npm run test:interfaccia  # prova Playwright a 390 e 1280 px, tema chiaro e scuro (screenshot in ./prova-foto)
+# Posta e calendario Apple si provano con server finti (IMAP, SMTP, iCloud): nessuna casella vera.
 ```
 
 ## Licenza
