@@ -1,5 +1,5 @@
 // Server web di Jarvis (Express 5): sicurezza, accesso, API e file dell'interfaccia.
-import express, { type Request, type Response, type NextFunction } from "express";
+import express, { type Request, type Response, type NextFunction, type Router } from "express";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -35,6 +35,11 @@ import { creaServizioPosta, type ServizioPosta } from "./posta/servizio.js";
 import { leggiCaselle } from "./posta/caselle.js";
 import { leggiApple, eventiApple, type FonteApple } from "./calendarioApple.js";
 import { montaRotteFase2 } from "./rotteFase2.js";
+import { creaServizioWhatsapp, type ServizioWhatsapp } from "./whatsapp/servizio.js";
+import { creaRotteWebhook } from "./whatsapp/webhook.js";
+import { PERCORSO_WEBHOOK, collegamentoVisibile } from "./whatsapp/collegamento.js";
+import type { DipendenzeWhatsapp } from "./whatsapp/tipi.js";
+import { montaRotteWhatsapp } from "./rotteWhatsapp.js";
 
 export interface OpzioniApp {
   config: Config;
@@ -50,10 +55,12 @@ export interface OpzioniApp {
   uscita?: PostaInUscita;
   risolvi?: RisolviNome;
   fetchApple?: typeof fetch;
+  /** Fase 3, solo per i test: fetch verso un Meta (o fornitore) finto per l'invio dei messaggi. */
+  fetchWhatsapp?: typeof fetch;
 }
 
-/** Servizi della Fase 2, raggiungibili da server.ts (giro della posta ogni 5 minuti). */
-export interface ServiziApp { posta: ServizioPosta; apple: FonteApple }
+/** Servizi delle Fasi 2 e 3, raggiungibili da server.ts (giro della posta ogni 5 minuti, giro di WhatsApp ogni minuto). */
+export interface ServiziApp { posta: ServizioPosta; apple: FonteApple; whatsapp: ServizioWhatsapp }
 
 const qui = fileURLToPath(new URL(".", import.meta.url));
 const VISTA = z.enum(["privato", "lavoro", "tutto"]);
@@ -94,6 +101,12 @@ export function creaApp(o: OpzioniApp) {
     if (req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store");
     next();
   });
+
+  // ------------------------------------------------------------ Fase 3: webhook pubblico di WhatsApp
+  // Prima del controllo Origin e del JSON (lo chiama Meta, con il corpo grezzo da firmare), ma con le sue regole:
+  // Host ammesso, 404 finché non è configurato, firma HMAC obbligatoria, limite di dimensione e di richieste.
+  let rotteWebhook: Router | null = null;
+  app.use(PERCORSO_WEBHOOK, (req, res, next) => (rotteWebhook ? rotteWebhook(req, res, next) : res.status(404).json({ errore: "Non trovato." })));
 
   // ------------------------------------------------------------ Host (contro il DNS rebinding) e CSRF (controllo Origin)
   app.use((req, res, next) => {
@@ -205,11 +218,19 @@ export function creaApp(o: OpzioniApp) {
   const fonteApple: FonteApple = { db, cifratore, fetchFn: o.fetchApple };
   /** Eventi dei calendari Apple scelti; undefined se il calendario Apple non è collegato. */
   const calendarioApple = () => (leggiApple(fonteApple) ? (da: number, a: number) => eventiApple(fonteApple, da, a, config.fusoOrario) : undefined);
-  app.locals.servizi = { posta: servizioPosta, apple: fonteApple } satisfies ServiziApp;
+  // Fase 3: WhatsApp. Le aziende sono quelle dell'elenco (anche senza indirizzo di Costructo); per cercare i numeri
+  // tra le controparti servono quelle collegate.
+  const dipWhatsapp: DipendenzeWhatsapp = {
+    db, cifratore, fuso: config.fusoOrario, cervello, modello: config.modelloPredefinito, aziende: aziendePosta,
+    aziendeCostructo: aziende, invia: o.invia ?? null, fetchFn: o.fetchWhatsapp,
+  };
+  const servizioWhatsapp = creaServizioWhatsapp(dipWhatsapp);
+  rotteWebhook = creaRotteWebhook({ db, cifratore, servizio: servizioWhatsapp, hostAmmessi });
+  app.locals.servizi = { posta: servizioPosta, apple: fonteApple, whatsapp: servizioWhatsapp } satisfies ServiziApp;
 
   const dip = {
     db, fuso: config.fusoOrario, modelloPredefinito: config.modelloPredefinito, modelloApprofondito: config.modelloApprofondito,
-    cervello, aziende, linkCalendario, fetchFn: o.fetchFn, posta: dipPosta,
+    cervello, aziende, linkCalendario, fetchFn: o.fetchFn, posta: dipPosta, whatsapp: dipWhatsapp,
   };
   const prepara = () => creaBriefing({ db, fuso: config.fusoOrario, aziende: aziende(), linkCalendario: linkCalendario(), fetchFn: o.fetchFn, calendarioApple: calendarioApple() });
 
@@ -240,7 +261,7 @@ export function creaApp(o: OpzioniApp) {
   app.post("/api/conferme/:id", async (req, res) => {
     const s = z.object({ scelta: z.union([z.literal("conferma"), z.literal("annulla"), z.number().int().min(0).max(9)]) }).safeParse(req.body);
     if (!s.success) return res.status(400).json({ errore: "Scelta non valida." });
-    res.json(await rispondiConferma(db, String(req.params.id), s.data.scelta, config.fusoOrario, Date.now(), dipPosta));
+    res.json(await rispondiConferma(db, String(req.params.id), s.data.scelta, config.fusoOrario, Date.now(), dipPosta, dipWhatsapp));
   });
 
   // ------------------------------------------------------------ memoria («Cosa sa di me»)
@@ -331,6 +352,7 @@ export function creaApp(o: OpzioniApp) {
       calendario: !!linkCalendario(),
       calendarioApple: !!leggiApple(fonteApple),
       caselleEmail: leggiCaselle({ db, cifratore }).length,
+      whatsapp: collegamentoVisibile({ db, cifratore }, config.origineAmmessa).webhookAttivo,
       anthropic: !!config.anthropicApiKey,
       elevenLabs: false,
     };
@@ -439,6 +461,8 @@ export function creaApp(o: OpzioniApp) {
 
   // ------------------------------------------------------------ Fase 2: caselle email, Posta, bozze, calendario Apple
   montaRotteFase2(app, { db, posta: servizioPosta, apple: fonteApple });
+  // ------------------------------------------------------------ Fase 3: pagina WhatsApp e impostazioni (il webhook pubblico è sopra)
+  montaRotteWhatsapp(app, { db, whatsapp: servizioWhatsapp, origini: () => config.origineAmmessa });
 
   app.use("/api", (_req, res) => { res.status(404).json({ errore: "Non trovato." }); });
 

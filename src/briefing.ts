@@ -1,6 +1,7 @@
 // Briefing mattutino: impegni, cantieri, scadenze, documenti in scadenza, fatture da incassare, meteo.
 // Con più aziende collegate, la parte di lavoro è divisa per azienda (ogni frase inizia con il nome).
 // Fase 2: mail urgenti per azienda e private (dalle ultime 24 ore) ed eventi dei calendari Apple scelti.
+// Fase 3: chat WhatsApp senza risposta e urgenti, per azienda e private (mai il testo dei messaggi).
 // Testo costruito SENZA AI (costo zero, nessun rischio di dati inventati).
 import type { Db } from "./db.js";
 import type { ClientCostructo, BriefingCostructo } from "./costructo.js";
@@ -11,6 +12,7 @@ import { meteoCantieri, type MeteoCantiere } from "./meteo.js";
 import { scaricaCalendario, occorrenze } from "./calendario.js";
 import { inizioGiorno, oraMinuti } from "./tempo.js";
 import type { EventoApple } from "./calendarioApple.js";
+import { statoChat } from "./whatsapp/archivio.js";
 
 export interface RigaBriefing { testo: string; numero?: { id: string; etichetta: string; valore: number; suffisso?: string } }
 export interface CosaImportante { spazio: "privato" | "lavoro"; testo: string; quando?: string; azienda?: string }
@@ -24,8 +26,11 @@ export interface SezioneAzienda {
   avvisi: string[];
   /** Mail urgenti delle caselle di questa azienda (ultime 24 ore). */
   posta?: PostaUrgente;
+  /** Chat WhatsApp di questa azienda senza risposta (ultimi 2 giorni) e con messaggi urgenti (ultime 24 ore). */
+  whatsapp?: WhatsappDaFare;
 }
 export interface PostaUrgente { urgenti: number; primo?: string }
+export interface WhatsappDaFare { senzaRisposta: number; urgenti: number }
 export interface Briefing {
   righe: RigaBriefing[];
   adesso: CosaImportante[];
@@ -37,6 +42,10 @@ export interface Briefing {
   avvisi: string[];
   /** Mail urgenti private (ultime 24 ore). */
   postaPrivata?: PostaUrgente;
+  /** Chat WhatsApp private senza risposta e urgenti. */
+  whatsappPrivato?: WhatsappDaFare;
+  /** Contatti WhatsApp di cui Jarvis deve ancora sapere l'azienda. */
+  whatsappDaAssegnare?: number;
 }
 
 const plurale = (n: number, uno: string, tanti: string) => `${n} ${n === 1 ? uno : tanti}`;
@@ -69,6 +78,26 @@ function postaUrgente(db: Db, ora: number): Map<string, PostaUrgente> {
   }
   return out;
 }
+/** Chat WhatsApp per spazio (id dell'azienda, «privato» o '' se non assegnate): senza risposta e urgenti. */
+function whatsappDaFare(db: Db, ora: number): Map<string, WhatsappDaFare> {
+  const righe = db.prepare(`SELECT c.id, c.spazio, MAX(CASE WHEN m.urgente = 1 AND m.ricevuto >= ? THEN 1 ELSE 0 END) AS urgente
+      FROM wa_contatti c JOIN wa_messaggi m ON m.contatto_id = c.id
+      WHERE m.direzione = 'in' AND m.storico = 0 AND m.ricevuto >= ? GROUP BY c.id`).all(ora - 864e5, ora - 2 * 864e5) as Array<{ id: string; spazio: string; urgente: number }>;
+  const out = new Map<string, WhatsappDaFare>();
+  for (const r of righe) {
+    const w = out.get(r.spazio) ?? { senzaRisposta: 0, urgenti: 0 };
+    if (statoChat(db, r.id, ora).senzaRisposta) w.senzaRisposta++;
+    if (r.urgente) w.urgenti++;
+    out.set(r.spazio, w);
+  }
+  for (const [k, w] of out) if (!w.senzaRisposta && !w.urgenti) out.delete(k);
+  return out;
+}
+const fraseWhatsapp = (w: WhatsappDaFare) => [
+  w.senzaRisposta ? plurale(w.senzaRisposta, "chat WhatsApp senza risposta", "chat WhatsApp senza risposta") : "",
+  w.urgenti ? `${plurale(w.urgenti, "chat WhatsApp urgente", "chat WhatsApp urgenti")}` : "",
+].filter(Boolean).join(", ");
+
 const fraseUrgenti = (p: PostaUrgente) => `${plurale(p.urgenti, "mail urgente", "mail urgenti")}${p.primo ? `, ${p.urgenti === 1 ? "" : "la prima: "}«${p.primo}»` : ""}`;
 
 /** Frasi del lavoro di una azienda. Con più aziende una sola frase che inizia con il nome. */
@@ -123,6 +152,7 @@ export async function creaBriefing(o: OpzioniBriefing): Promise<Briefing> {
     oggi.push({ ora: e.tuttoIlGiorno ? "" : oraMinuti(e.inizio, o.fuso), titolo: e.titolo, spazio: "privato" });
   }
   const posta = postaUrgente(o.db, ora);
+  const whatsapp = whatsappDaFare(o.db, ora);
 
   // ---- lavoro: ogni azienda per conto suo; l'errore di una non ferma le altre
   const elenco: AziendaCollegata[] = (o.aziende ?? (o.costructo ? [{ id: "principale", nome: "", client: o.costructo }] : [])).filter((a) => a.client.configurato);
@@ -142,6 +172,13 @@ export async function creaBriefing(o: OpzioniBriefing): Promise<Briefing> {
       if (piu && sez.righe[0]) sez.righe[0] = { ...sez.righe[0], testo: `${sez.righe[0].testo.replace(/\.$/, "")}; ${fraseUrgenti(p)}.` };
       else if (piu) sez.righe.push({ testo: `${sez.nome}: ${fraseUrgenti(p)}.` });
       else sez.righe.push({ testo: `Posta di lavoro: ${fraseUrgenti(p)}.` });
+    }
+    const w = whatsapp.get(sez.id);
+    if (w) {
+      sez.whatsapp = w;
+      if (piu && sez.righe[0]) sez.righe[0] = { ...sez.righe[0], testo: `${sez.righe[0].testo.replace(/\.$/, "")}; ${fraseWhatsapp(w)}.` };
+      else if (piu) sez.righe.push({ testo: `${sez.nome}: ${fraseWhatsapp(w)}.` });
+      else sez.righe.push({ testo: `WhatsApp di lavoro: ${fraseWhatsapp(w)}.` });
     }
   }
   // Calendari Apple delle aziende: l'evento dice sempre di quale azienda è.
@@ -177,6 +214,14 @@ export async function creaBriefing(o: OpzioniBriefing): Promise<Briefing> {
   if (altre) righe.push({ testo: `Posta di lavoro: ${plurale(altre, "mail urgente", "mail urgenti")}.` });
   const postaPrivata = posta.get("privato");
   if (postaPrivata) righe.push({ testo: `Posta privata: ${fraseUrgenti(postaPrivata)}.` });
+  // WhatsApp di aziende senza sezione (Costructo non collegato), privato e contatti da assegnare.
+  const waAltre = [...whatsapp.entries()].filter(([sp]) => sp && sp !== "privato" && !aziende.some((a) => a.id === sp))
+    .reduce((t, [, w]) => ({ senzaRisposta: t.senzaRisposta + w.senzaRisposta, urgenti: t.urgenti + w.urgenti }), { senzaRisposta: 0, urgenti: 0 });
+  if (waAltre.senzaRisposta || waAltre.urgenti) righe.push({ testo: `WhatsApp di lavoro: ${fraseWhatsapp(waAltre)}.` });
+  const whatsappPrivato = whatsapp.get("privato");
+  if (whatsappPrivato) righe.push({ testo: `WhatsApp privato: ${fraseWhatsapp(whatsappPrivato)}.` });
+  const whatsappDaAssegnare = (o.db.prepare("SELECT COUNT(*) n FROM wa_domande WHERE stato = 'aperta'").get() as { n: number }).n;
+  if (whatsappDaAssegnare) righe.push({ testo: `WhatsApp: ${plurale(whatsappDaAssegnare, "contatto nuovo", "contatti nuovi")} da assegnare a un'azienda o al privato.` });
   const pioggia = meteo.filter((m) => (m.pioggia ?? 0) >= 60);
   if (pioggia.length) righe.push({ testo: `Oggi è probabile pioggia su: ${pioggia.map((m) => m.cantiere).join(", ")}.` });
   if (avvisi.length) righe.push({ testo: "Alcune fonti non hanno risposto: trovi i dettagli sullo schermo." });
@@ -202,7 +247,10 @@ export async function creaBriefing(o: OpzioniBriefing): Promise<Briefing> {
     const prossimi = impegniProssimiGiorni(o.db, 7, o.fuso, ora).filter((i) => i.inizio >= fine).slice(0, 3 - adesso.length);
     for (const i of prossimi) adesso.push({ spazio: "privato", testo: descriviImpegno(i, o.fuso) });
   }
-  return { righe, adesso: adesso.slice(0, 3), oggi, lavoro: piu ? null : (aziende[0]?.lavoro ?? null), aziende, meteo, avvisi, ...(postaPrivata ? { postaPrivata } : {}) };
+  return {
+    righe, adesso: adesso.slice(0, 3), oggi, lavoro: piu ? null : (aziende[0]?.lavoro ?? null), aziende, meteo, avvisi,
+    ...(postaPrivata ? { postaPrivata } : {}), ...(whatsappPrivato ? { whatsappPrivato } : {}), ...(whatsappDaAssegnare ? { whatsappDaAssegnare } : {}),
+  };
 }
 
 /** Testo breve per la notifica del mattino (una sola azienda o nessuna). */
@@ -230,11 +278,12 @@ export function notificheDelMattino(b: Briefing): Notifica[] {
     return { titolo: `${sez.nome} · ${TITOLO_NOTIFICA}`.slice(0, 80), testo: (testo.startsWith(sez.nome) ? testo : `${sez.nome}: ${testo}`).slice(0, 180) };
   });
   const privati = b.oggi.filter((x) => x.spazio === "privato");
-  if (privati.length || b.postaPrivata) {
+  if (privati.length || b.postaPrivata || b.whatsappPrivato) {
     const primo = privati.find((x) => x.ora);
     const frasi = [
       ...(privati.length ? [`Oggi hai ${plurale(privati.length, "impegno personale", "impegni personali")}${primo ? `, il primo alle ${primo.ora}: ${primo.titolo}` : ""}.`] : []),
       ...(b.postaPrivata ? [`Posta privata: ${plurale(b.postaPrivata.urgenti, "mail urgente", "mail urgenti")}.`] : []),
+      ...(b.whatsappPrivato ? [`WhatsApp privato: ${fraseWhatsapp(b.whatsappPrivato)}.`] : []),
     ];
     out.push({ titolo: TITOLO_NOTIFICA, testo: frasi.join(" ").slice(0, 180) });
   }

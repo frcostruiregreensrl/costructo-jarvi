@@ -1,4 +1,4 @@
-// Strumenti che l'AI può usare (Fasi 1 e 2). Ogni chiamata: validazione (zod) → controllo → permesso → esecuzione → registro.
+// Strumenti che l'AI può usare (Fasi 1, 2 e 3). Ogni chiamata: validazione (zod) → controllo → permesso → esecuzione → registro.
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Db } from "./db.js";
@@ -18,6 +18,13 @@ import type { DipendenzePosta } from "./posta/tipi.js";
 import { elencoPerAi, leggiPerAi, mailPerBozza, type ContestoPosta } from "./posta/strumentiPosta.js";
 import { creaBozza, oggettoRisposta, destinatarioRisposta, MAX_TESTO_BOZZA } from "./posta/bozze.js";
 import { nomeSpazio } from "./posta/caselle.js";
+import type { DipendenzeWhatsapp } from "./whatsapp/tipi.js";
+import { PRIVATO as PRIVATO_WA } from "./whatsapp/tipi.js";
+import { elencoPerAi as elencoWa, chatPerAi, trovaContattoPerAi, type ContestoWa } from "./whatsapp/strumentiWhatsapp.js";
+import { leggiContatto, nomeContatto, nomeSpazio as nomeSpazioWa, statoChat } from "./whatsapp/archivio.js";
+import { fuoriFinestra, preparaRisposta, inviaRisposta } from "./whatsapp/risposte.js";
+import { rispondiDomanda } from "./whatsapp/attribuzione.js";
+import { MAX_TESTO_RISPOSTA } from "./whatsapp/tipi.js";
 
 export type EventoFlusso =
   | { tipo: "delta"; testo: string }
@@ -51,6 +58,8 @@ export interface ContestoStrumenti {
   posta?: DipendenzePosta;
   /** Fase 2: eventi dei calendari Apple scelti (con lo spazio: privato o id dell'azienda). */
   calendarioApple?: (da: number, a: number) => Promise<{ eventi: EventoApple[]; avvisi: string[] }>;
+  /** Fase 3: WhatsApp (assente = non disponibile). */
+  whatsapp?: DipendenzeWhatsapp;
 }
 
 const oggetto = (properties: Record<string, unknown>) => ({ type: "object", properties, required: Object.keys(properties), additionalProperties: false });
@@ -68,6 +77,8 @@ interface Strumento<S extends z.ZodTypeAny> {
   verifica?: (i: z.infer<S>, c: ContestoStrumenti) => string | null;
   /** Cosa scrivere nel registro al posto dell'input (per non salvare testi delle mail o delle bozze). */
   perRegistro?: (i: z.infer<S>) => Record<string, unknown>;
+  /** Dati in più da ricordare nella richiesta di conferma (es. l'id del contatto trovato nella scheda aperta). */
+  datiConferma?: (i: z.infer<S>, c: ContestoStrumenti) => Record<string, unknown>;
   esegui: (i: z.infer<S>, c: ContestoStrumenti) => Promise<string> | string;
 }
 function strumento<S extends z.ZodTypeAny>(s: Strumento<S>): Strumento<S> { return s; }
@@ -149,6 +160,21 @@ function contestoPosta(c: ContestoStrumenti): ContestoPosta | null {
   if (!c.posta) return null;
   return { db: c.db, cifratore: c.posta.cifratore, fuso: c.fuso, vista: c.vista, aziende: c.posta.aziende() };
 }
+/** Contesto per WhatsApp (null se non ci sono le dipendenze). */
+function contestoWa(c: ContestoStrumenti): ContestoWa | null {
+  if (!c.whatsapp) return null;
+  return { db: c.db, fuso: c.fuso, vista: c.vista, aziende: c.whatsapp.aziende() };
+}
+const SENZA_WA = "WhatsApp non è disponibile in questo momento: dillo a Luigi in una frase.";
+/** «privato» oppure l'id dell'unica azienda che corrisponde al nome; altrimenti la domanda da fare. */
+function spazioDaNome(c: ContestoWa, nome: string): { spazio?: string; domanda?: string } {
+  const r = nome.trim();
+  if (/^(privat[oa]|personale|vita privata)$/i.test(r)) return { spazio: PRIVATO_WA };
+  const t = trovaAziende(c.aziende, r);
+  if (t.length === 1) return { spazio: t[0].id };
+  return { domanda: `Di quale azienda: ${[...c.aziende.map((a) => a.nome), "privato"].join(", ").replace(/, ([^,]*)$/, " o $1")}?` };
+}
+
 const SENZA_POSTA = "Nessuna casella email collegata: dillo a Luigi in una frase (si collegano da Impostazioni → Caselle email).";
 const campoTesto = (descrizione: string) => ({ type: "string", description: descrizione });
 
@@ -399,6 +425,122 @@ export const STRUMENTI = [
       return r.messaggio;
     },
   }),
+  // ------------------------------------------------------------ WhatsApp (Fase 3): lettura e risposte, che partono SOLO dopo il sì di Luigi
+  strumento({
+    def: {
+      nome: "whatsapp_recenti",
+      descrizione: "Elenca le chat WhatsApp recenti di Luigi con riassunto, urgenza e se aspettano una risposta. Ogni chat dice a quale azienda (o al privato) appartiene.",
+      schema: oggetto({
+        contatto: campoTesto("Nome del contatto, se Luigi lo dice; altrimenti stringa vuota"),
+        azienda: campoTesto("Azienda (o «privato») di cui parla Luigi; stringa vuota per tutte quelle visibili"),
+        soloUrgenti: { type: "boolean", description: "true per vedere solo le chat con messaggi urgenti" },
+        giorni: { type: "integer", description: "Quanti giorni indietro guardare (1-30)" },
+      }),
+    },
+    azione: "whatsapp.leggi", viste: ["privato", "lavoro", "tutto"],
+    input: z.object({ contatto: z.string().max(80), azienda: z.string().max(80), soloUrgenti: z.boolean(), giorni: z.number().int().min(1).max(30) }).strict(),
+    perRegistro: (i) => ({ soloUrgenti: i.soloUrgenti, giorni: i.giorni }),
+    esegui: (i, c) => {
+      const w = contestoWa(c);
+      return w ? elencoWa(w, { contatto: i.contatto, azienda: i.azienda, soloUrgenti: i.soloUrgenti, giorni: i.giorni }) : SENZA_WA;
+    },
+  }),
+  strumento({
+    def: {
+      nome: "whatsapp_cerca",
+      descrizione: "Cerca nei messaggi WhatsApp salvati da Jarvis (ultimi 30 giorni) per parole, nome del contatto o nome di un allegato.",
+      schema: oggetto({
+        testo: campoTesto("Parole da cercare"),
+        azienda: campoTesto("Azienda (o «privato»), se Luigi la dice; altrimenti stringa vuota"),
+        giorni: { type: "integer", description: "Quanti giorni indietro guardare (1-30)" },
+      }),
+    },
+    azione: "whatsapp.leggi", viste: ["privato", "lavoro", "tutto"],
+    input: z.object({ testo: z.string().min(1).max(200), azienda: z.string().max(80), giorni: z.number().int().min(1).max(30) }).strict(),
+    perRegistro: (i) => ({ giorni: i.giorni }),
+    esegui: (i, c) => {
+      const w = contestoWa(c);
+      return w ? elencoWa(w, { testo: i.testo, azienda: i.azienda, giorni: i.giorni }) : SENZA_WA;
+    },
+  }),
+  strumento({
+    def: {
+      nome: "whatsapp_chat",
+      descrizione: "Legge gli ultimi messaggi di una chat WhatsApp (per nome del contatto o id dagli elenchi). Se il nome corrisponde a più chat, chiedi a Luigi quale.",
+      schema: oggetto({
+        contatto: campoTesto("Nome del contatto o id della chat"),
+        azienda: campoTesto("Azienda (o «privato»), se Luigi la dice; altrimenti stringa vuota"),
+        quanti: { type: "integer", description: "Quanti messaggi (1-40, di solito 15)" },
+      }),
+    },
+    azione: "whatsapp.leggi", viste: ["privato", "lavoro", "tutto"],
+    input: z.object({ contatto: z.string().min(1).max(80), azienda: z.string().max(80), quanti: z.number().int().min(1).max(40) }).strict(),
+    perRegistro: (i) => ({ quanti: i.quanti }),
+    esegui: (i, c) => {
+      const w = contestoWa(c);
+      return w ? chatPerAi(w, i) : SENZA_WA;
+    },
+  }),
+  strumento({
+    def: {
+      nome: "whatsapp_risposta",
+      descrizione: "Prepara una risposta WhatsApp a un contatto. Parte SOLO dopo la conferma di Luigi (vede il testo e un pulsante). Possibile solo entro 24 ore dall'ultimo messaggio del contatto; mai nei gruppi.",
+      schema: oggetto({
+        contatto: campoTesto("Nome del contatto o id della chat"),
+        azienda: campoTesto("Azienda (o «privato»), se Luigi la dice; altrimenti stringa vuota"),
+        testo: campoTesto("Testo del messaggio, in italiano, cortese e breve. Niente promesse di pagamenti, importi, date o impegni: dove servono scrivi [da completare]"),
+      }),
+    },
+    azione: "whatsapp.risposta", viste: ["privato", "lavoro", "tutto"],
+    input: z.object({ contatto: z.string().min(1).max(80), azienda: z.string().max(80), testo: z.string().min(1).max(MAX_TESTO_RISPOSTA) }).strict(),
+    verifica: (i, c) => {
+      const w = contestoWa(c);
+      if (!w) return SENZA_WA;
+      const t = trovaContattoPerAi(w, i.contatto, i.azienda);
+      if (!t.contatto) return t.errore!;
+      if (t.contatto.gruppo) return "Jarvis non scrive nei gruppi: Luigi può rispondere dal telefono.";
+      if (!statoChat(c.db, t.contatto.id).dentroFinestra) return fuoriFinestra(nomeContatto(t.contatto));
+      return null;
+    },
+    datiConferma: (i, c) => ({ contattoId: trovaContattoPerAi(contestoWa(c)!, i.contatto, i.azienda).contatto?.id }),
+    perRegistro: (i) => ({ azienda: i.azienda || undefined }),
+    esegui: async (i, c) => {
+      // Il permesso chiede sempre il pulsante: l'invio parte da rispondiConferma, dopo il sì di Luigi.
+      const k = trovaContattoPerAi(contestoWa(c)!, i.contatto, i.azienda).contatto!;
+      const r = preparaRisposta(c.whatsapp!, k.id, i.testo, "risposta", "bozza", "luigi");
+      return (await inviaRisposta(c.whatsapp!, r.id)).messaggio;
+    },
+  }),
+  strumento({
+    def: {
+      nome: "whatsapp_assegna_azienda",
+      descrizione: "Dice a quale azienda (o al privato) appartiene un contatto WhatsApp, e Jarvis se lo ricorda. Serve sempre la conferma di Luigi.",
+      schema: oggetto({
+        contatto: campoTesto("Nome del contatto o id della chat"),
+        azienda: campoTesto("Nome dell'azienda oppure «privato»"),
+      }),
+    },
+    azione: "whatsapp.assegna", viste: ["privato", "lavoro", "tutto"],
+    input: z.object({ contatto: z.string().min(1).max(80), azienda: z.string().min(1).max(80) }).strict(),
+    verifica: (i, c) => {
+      const w = contestoWa(c);
+      if (!w) return SENZA_WA;
+      const t = trovaContattoPerAi({ ...w, vista: "tutto" }, i.contatto);
+      if (!t.contatto) return t.errore!;
+      const s = spazioDaNome(w, i.azienda);
+      return s.domanda ? `Non è chiaro di quale azienda: chiedilo a Luigi.\n${marcaDati("aziende", { domandaSuggerita: s.domanda })}` : null;
+    },
+    datiConferma: (i, c) => {
+      const w = contestoWa(c)!;
+      return { contattoId: trovaContattoPerAi({ ...w, vista: "tutto" }, i.contatto).contatto?.id, spazio: spazioDaNome(w, i.azienda).spazio };
+    },
+    perRegistro: () => ({}),
+    esegui: (i, c) => {
+      const w = contestoWa(c)!;
+      const k = trovaContattoPerAi({ ...w, vista: "tutto" }, i.contatto).contatto!;
+      return `Fatto: ${nomeContatto(k)} è di ${rispondiDomanda(c.whatsapp!, k.id, spazioDaNome(w, i.azienda).spazio!)}.`;
+    },
+  }),
 ];
 
 const PER_NOME = new Map(STRUMENTI.map((s) => [s.def.nome, s as unknown as Strumento<z.ZodTypeAny>]));
@@ -443,13 +585,15 @@ export async function eseguiStrumento(nome: string, input: unknown, c: ContestoS
     return { contenuto: `Non consentito: ${decisione.motivo}`, errore: true };
   }
   if (decisione.esito === "conferma") {
-    const id = creaConferma(c, s.azione, { strumento: nome, input: v.data });
+    const id = creaConferma(c, s.azione, { strumento: nome, input: v.data, ...(s.datiConferma?.(v.data, c) ?? {}) });
     c.emetti({ tipo: "conferma", id, domanda: descriviProposta(nome, v.data, c), opzioni: [] });
     registra(c.db, s.azione, "richiesta_conferma", "jarvis", { strumento: nome, ...registroInput, motivo: decisione.motivo, conferma: id });
     return {
       contenuto: nome === "posta_bozza"
         ? "Non fatto: serve la conferma di Luigi, che vede il testo della bozza e un pulsante. Diglielo in una frase. Anche dopo la conferma la bozza NON viene inviata: la manda lui."
-        : "Non fatto: serve la conferma di Luigi, che vede un pulsante. Diglielo in una frase.",
+        : nome === "whatsapp_risposta"
+          ? "Non mandato: il messaggio parte solo se Luigi conferma (vede il testo e un pulsante). Diglielo in una frase; non dire che è partito."
+          : "Non fatto: serve la conferma di Luigi, che vede un pulsante. Diglielo in una frase.",
       errore: false,
     };
   }
@@ -477,6 +621,17 @@ function descriviProposta(nome: string, input: Record<string, unknown>, c?: Cont
     const testo = String(input.testo ?? "").replace(/\s+/g, " ").trim();
     return `Vuoi che metta questa bozza nelle Bozze${dove ? ` (${dove})` : ""}, in risposta a ${t.m ? `${destinatarioRisposta(t.m)} «${oggettoRisposta(t.m.oggetto)}»` : "questa mail"}? Non verrà inviata: la mandi tu.\n\n«${testo.length > 400 ? `${testo.slice(0, 400)}…` : testo}»`;
   }
+  if (nome === "whatsapp_risposta" || nome === "whatsapp_assegna_azienda") {
+    const w = c ? contestoWa(c) : null;
+    const k = w ? trovaContattoPerAi(nome === "whatsapp_assegna_azienda" ? { ...w, vista: "tutto" } : w, String(input.contatto), nome === "whatsapp_risposta" ? String(input.azienda ?? "") : "").contatto : undefined;
+    const chi = k && w ? `${nomeContatto(k)} (${nomeSpazioWa(k.spazio, w.aziende)})` : String(input.contatto);
+    if (nome === "whatsapp_assegna_azienda") {
+      const s = w ? spazioDaNome(w, String(input.azienda)).spazio : undefined;
+      return `Vuoi che ${chi} sia considerato di ${s && w ? nomeSpazioWa(s, w.aziende) : String(input.azienda)}? Me lo ricorderò per le prossime chat.`;
+    }
+    const testo = String(input.testo ?? "").replace(/\s+/g, " ").trim();
+    return `Vuoi che mandi su WhatsApp a ${chi} questo messaggio? Parte solo se confermi.\n\n«${testo.length > 600 ? `${testo.slice(0, 600)}…` : testo}»`;
+  }
   if (nome === "agenda_aggiungi") return `Vuoi che segni «${input.titolo}» il ${input.data}${input.ora ? ` alle ${input.ora}` : ""}?`;
   if (nome === "agenda_cancella") return `Vuoi che cancelli l'impegno «${input.titolo}»?`;
   if (nome === "ricordo_salva") return `Vuoi che ricordi (${input.spazio}): «${input.testo}»?`;
@@ -484,7 +639,7 @@ function descriviProposta(nome: string, input: Record<string, unknown>, c?: Cont
 }
 
 /** Luigi risponde a una conferma (pulsante o «sì» / «il secondo» / «annulla»). */
-export async function rispondiConferma(db: Db, id: string, scelta: "conferma" | "annulla" | number, fuso: string, ora = Date.now(), posta?: DipendenzePosta): Promise<{ ok: boolean; messaggio: string }> {
+export async function rispondiConferma(db: Db, id: string, scelta: "conferma" | "annulla" | number, fuso: string, ora = Date.now(), posta?: DipendenzePosta, whatsapp?: DipendenzeWhatsapp): Promise<{ ok: boolean; messaggio: string }> {
   const r = db.prepare("SELECT * FROM conferme WHERE id = ?").get(id) as { id: string; creata: number; azione: string; dati: string; stato: string } | undefined;
   if (!r || r.stato !== "in_attesa") return { ok: false, messaggio: "Questa richiesta non è più in attesa." };
   if (ora - r.creata > 15 * 60_000) {
@@ -496,7 +651,7 @@ export async function rispondiConferma(db: Db, id: string, scelta: "conferma" | 
     registra(db, r.azione, "negato", "luigi", { conferma: id, motivo: "annullata da Luigi" });
     return { ok: true, messaggio: "Va bene, non faccio niente." };
   }
-  const dati = JSON.parse(r.dati) as { ids?: string[]; strumento?: string; input?: Record<string, unknown> };
+  const dati = JSON.parse(r.dati) as { ids?: string[]; strumento?: string; input?: Record<string, unknown>; contattoId?: string; spazio?: string };
   let messaggio = "Fatto.";
   if (dati.ids) {
     const indice = typeof scelta === "number" ? scelta : dati.ids.length === 1 ? 0 : -1;
@@ -524,6 +679,24 @@ export async function rispondiConferma(db: Db, id: string, scelta: "conferma" | 
       return { ok: true, messaggio: r.messaggio };
     } catch (e) {
       return { ok: false, messaggio: (e as Error).message || "Bozza non riuscita." };
+    }
+  } else if ((dati.strumento === "whatsapp_risposta" || dati.strumento === "whatsapp_assegna_azienda") && dati.input) {
+    if (!whatsapp) return { ok: false, messaggio: "WhatsApp non è disponibile in questo momento." };
+    const k = dati.contattoId ? leggiContatto(db, dati.contattoId) : undefined;
+    if (!k) return { ok: false, messaggio: "Non trovo più quella chat." };
+    // Si segna subito come confermata: un secondo clic non manda un secondo messaggio.
+    if (db.prepare("UPDATE conferme SET stato = 'confermata' WHERE id = ? AND stato = 'in_attesa'").run(id).changes === 0) return { ok: false, messaggio: "Questa richiesta non è più in attesa." };
+    registra(db, r.azione, "fatto", "luigi", { conferma: id, contatto: k.id });
+    try {
+      if (dati.strumento === "whatsapp_assegna_azienda") {
+        if (!dati.spazio) return { ok: false, messaggio: "Non è chiaro di quale azienda: dimmelo di nuovo." };
+        return { ok: true, messaggio: `Fatto: ${nomeContatto(k)} è di ${rispondiDomanda(whatsapp, k.id, dati.spazio)}. Me lo ricordo.` };
+      }
+      const risposta = preparaRisposta(whatsapp, k.id, String(dati.input.testo), "risposta", "bozza", "luigi");
+      const e = await inviaRisposta(whatsapp, risposta.id);
+      return { ok: e.inviata, messaggio: e.messaggio };
+    } catch (e) {
+      return { ok: false, messaggio: (e as Error).message || "Non riuscito." };
     }
   } else {
     return { ok: false, messaggio: "Non so eseguire questa conferma." };

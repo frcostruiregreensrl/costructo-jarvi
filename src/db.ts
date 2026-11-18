@@ -159,6 +159,77 @@ CREATE TABLE IF NOT EXISTS posta_risposte_auto (
   dominio TEXT NOT NULL,
   quando INTEGER NOT NULL
 );
+
+-- Fase 3: WhatsApp (parte 1, senza collegamento reale). Il collegamento (token, segreto dell'app…)
+-- sta nel segreto cifrato «whatsapp». Qui contatti, messaggi (testo breve, al massimo 4 KB, 30 giorni),
+-- risposte in attesa di conferma, conferme automatiche e domande «di quale azienda è?».
+-- I numeri di telefono sono dati personali: non vanno mai interi nel registro né nelle notifiche.
+CREATE TABLE IF NOT EXISTS wa_contatti (
+  id TEXT PRIMARY KEY,
+  chiave TEXT NOT NULL UNIQUE,              -- numero WhatsApp (solo cifre) oppure «u:» + id utente di WhatsApp (BSUID)
+  wa_id TEXT NOT NULL DEFAULT '',           -- numero (solo cifre, con il prefisso del paese), '' se WhatsApp non lo dà
+  user_id TEXT NOT NULL DEFAULT '',         -- id utente di WhatsApp per questa azienda (BSUID)
+  nome_profilo TEXT NOT NULL DEFAULT '',    -- nome che il contatto si è dato su WhatsApp
+  nome_rubrica TEXT NOT NULL DEFAULT '',    -- nome nella rubrica dell'app WhatsApp Business di Luigi
+  gruppo INTEGER NOT NULL DEFAULT 0,        -- 1 = chat di gruppo (mai conferme automatiche, mai risposte)
+  spazio TEXT NOT NULL DEFAULT '',          -- '' = non si sa ancora | 'privato' | id dell'azienda
+  fonte_spazio TEXT NOT NULL DEFAULT '',    -- '' | 'luigi' (scelta di Luigi) | 'costructo' (numero trovato in Costructo)
+  proposta_spazio TEXT NOT NULL DEFAULT '', -- idea dell'AI dal contesto della chat: solo un suggerimento, mai una decisione
+  ultima_notifica INTEGER NOT NULL DEFAULT 0,
+  creato INTEGER NOT NULL,
+  aggiornato INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS wa_messaggi (
+  id TEXT PRIMARY KEY,
+  wamid TEXT NOT NULL UNIQUE,               -- id del messaggio di WhatsApp: lo stesso messaggio non si salva due volte
+  contatto_id TEXT NOT NULL,
+  gruppo_id TEXT NOT NULL DEFAULT '',
+  direzione TEXT NOT NULL CHECK (direzione IN ('in','out','eco')), -- in = ricevuto, out = mandato da Jarvis, eco = scritto da Luigi dal telefono
+  tipo TEXT NOT NULL,
+  quando INTEGER NOT NULL,                  -- millisecondi (dall'orario di WhatsApp)
+  ricevuto INTEGER NOT NULL,                -- quando è arrivato a Jarvis
+  testo TEXT NOT NULL DEFAULT '',           -- testo breve, al massimo 4 KB
+  media TEXT NOT NULL DEFAULT '{}',         -- solo i dati dell'allegato (tipo, mime, nome del file, didascalia, id): mai il contenuto
+  storico INTEGER NOT NULL DEFAULT 0,       -- 1 = chat passata importata: niente notifiche, conferme o classificazione
+  automatico INTEGER NOT NULL DEFAULT 0,    -- 1 = conferma di ricezione automatica di Jarvis (non vale come risposta di Luigi)
+  stato_invio TEXT NOT NULL DEFAULT '',     -- per i messaggi mandati da Jarvis: sent, delivered, read, failed
+  errore_invio TEXT NOT NULL DEFAULT '',
+  revocato INTEGER NOT NULL DEFAULT 0,
+  stato TEXT NOT NULL DEFAULT 'nessuno' CHECK (stato IN ('da_classificare','classificato','filtrato','tetto','errore','nessuno')),
+  riassunto TEXT NOT NULL DEFAULT '',
+  urgente INTEGER NOT NULL DEFAULT 0,
+  motivo TEXT NOT NULL DEFAULT '',
+  tocca INTEGER NOT NULL DEFAULT 0,         -- parla di pagamenti, importi o impegni
+  tentativi INTEGER NOT NULL DEFAULT 0,
+  notificata INTEGER NOT NULL DEFAULT 0,
+  conferma_auto TEXT NOT NULL DEFAULT ''    -- '' | 'inviata' | 'saltata: motivo'
+);
+CREATE INDEX IF NOT EXISTS wa_messaggi_contatto ON wa_messaggi(contatto_id, quando);
+CREATE INDEX IF NOT EXISTS wa_messaggi_stato ON wa_messaggi(stato);
+CREATE TABLE IF NOT EXISTS wa_risposte (
+  id TEXT PRIMARY KEY,
+  contatto_id TEXT NOT NULL,
+  tipo TEXT NOT NULL CHECK (tipo IN ('risposta','richiesta_documento')),
+  testo TEXT NOT NULL,
+  creata INTEGER NOT NULL,
+  stato TEXT NOT NULL CHECK (stato IN ('proposta','bozza','in_invio','inviata','errore','scartata')),
+  wamid TEXT NOT NULL DEFAULT '',
+  esito TEXT NOT NULL DEFAULT '',           -- sent, delivered, read, failed (dal webhook) o messaggio d'errore in italiano
+  inviata INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS wa_conferme_auto (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  contatto_id TEXT NOT NULL,
+  quando INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS wa_domande (
+  id TEXT PRIMARY KEY,
+  contatto_id TEXT NOT NULL,
+  creata INTEGER NOT NULL,
+  stato TEXT NOT NULL CHECK (stato IN ('aperta','risposta')),
+  risposta TEXT NOT NULL DEFAULT '',
+  notificata INTEGER NOT NULL DEFAULT 0
+);
 `;
 
 export function apriDb(file: string): Db {

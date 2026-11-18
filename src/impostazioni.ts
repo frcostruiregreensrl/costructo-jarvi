@@ -21,6 +21,13 @@ export const SchemaImpostazioni = z.object({
    * anche con una casella che le permette, finché questo è spento Jarvis non manda niente.
    */
   confermeAutomaticheAttive: z.boolean().default(false),
+  /**
+   * Fase 3: conferme di ricezione automatiche su WhatsApp. Spente di serie; anche accese partono solo
+   * se tutte le regole lo permettono (mai soldi o impegni, mai gruppi, mai se Luigi ha già risposto…).
+   */
+  whatsappConfermeAutomatiche: z.boolean().default(false),
+  /** Fase 3: nelle notifiche di WhatsApp non mostrare nemmeno il nome del contatto (solo azienda e «messaggio urgente»). */
+  whatsappNascondiContenuto: z.boolean().default(false),
 });
 export type Impostazioni = z.infer<typeof SchemaImpostazioni>;
 
@@ -49,8 +56,8 @@ export function scriviValore(db: Db, chiave: string, valore: unknown): void {
 }
 
 // ---------------------------------------------------------------- segreti cifrati (token Costructo, elenco delle aziende con i loro token, link iCal,
-// caselle email con le password, Apple ID con la password specifica per le app…)
-export type NomeSegreto = "costructo_url" | "costructo_token" | "costructo_aziende" | "calendario_ical" | "elevenlabs_chiave" | "posta_caselle" | "calendario_apple";
+// caselle email con le password, Apple ID con la password specifica per le app, collegamento WhatsApp…)
+export type NomeSegreto = "costructo_url" | "costructo_token" | "costructo_aziende" | "calendario_ical" | "elevenlabs_chiave" | "posta_caselle" | "calendario_apple" | "whatsapp";
 
 export function salvaSegreto(db: Db, c: Cifratore, nome: NomeSegreto, valore: string): void {
   if (!valore) { db.prepare("DELETE FROM segreti WHERE nome = ?").run(nome); return; }

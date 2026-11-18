@@ -17,6 +17,8 @@ import { descriviAdesso } from "./tempo.js";
 import { eseguiStrumento, strumentiPerVista, confermeAperte, rispondiConferma, type EventoFlusso, type ConfermaAperta, type ContestoStrumenti } from "./strumenti.js";
 import type { DipendenzePosta } from "./posta/tipi.js";
 import { riepilogoPerTurno } from "./posta/strumentiPosta.js";
+import type { DipendenzeWhatsapp } from "./whatsapp/tipi.js";
+import { riepilogoPerTurnoWa } from "./whatsapp/strumentiWhatsapp.js";
 
 export interface Dipendenze {
   db: Db;
@@ -32,6 +34,8 @@ export interface Dipendenze {
   posta?: DipendenzePosta;
   /** Fase 2: calendari Apple scelti. */
   calendarioApple?: ContestoStrumenti["calendarioApple"];
+  /** Fase 3: WhatsApp. */
+  whatsapp?: DipendenzeWhatsapp;
 }
 
 export interface Domanda { messaggio: string; vista: Vista; conversazione?: string }
@@ -87,11 +91,11 @@ async function gestisciConferma(dip: Dipendenze, aperte: ConfermaAperta[], r: Ri
   if (r.tipo === "dubbio") return richiedi(!!scelta && scelta.length > 1);
   if (r.tipo === "si") {
     if (scelta && scelta.length > 1) return richiedi(true);
-    const esito = await rispondiConferma(dip.db, c.id, "conferma", dip.fuso, Date.now(), dip.posta);
+    const esito = await rispondiConferma(dip.db, c.id, "conferma", dip.fuso, Date.now(), dip.posta, dip.whatsapp);
     return { fatto: esito.ok, messaggio: esito.messaggio };
   }
   if (!scelta || r.indice >= scelta.length) return richiedi(!!scelta);
-  const esito = await rispondiConferma(dip.db, c.id, r.indice, dip.fuso, Date.now(), dip.posta);
+  const esito = await rispondiConferma(dip.db, c.id, r.indice, dip.fuso, Date.now(), dip.posta, dip.whatsapp);
   return { fatto: esito.ok, messaggio: esito.messaggio };
 }
 
@@ -181,7 +185,7 @@ export async function rispondi(dip: Dipendenze, d: Domanda, emetti: (e: EventoFl
 
   const aziende = dip.aziende().filter((a) => a.client.configurato);
   const messaggi: MessaggioCervello[] = storia.map((m) => (m.ruolo === "utente" ? { ruolo: "utente", testo: m.testo } : { ruolo: "jarvis", testo: m.testo, chiamate: [] }));
-  messaggi.push({ ruolo: "utente", testo: contestoDelTurno(dip, d.vista, aziende, dip.posta) + `\n\nMessaggio di Luigi:\n${messaggio}` });
+  messaggi.push({ ruolo: "utente", testo: contestoDelTurno(dip, d.vista, aziende, dip.posta, dip.whatsapp) + `\n\nMessaggio di Luigi:\n${messaggio}` });
   const strumenti = strumentiPerVista(d.vista);
   const scritture = new Map<string, number>();
 
@@ -238,7 +242,7 @@ export async function rispondi(dip: Dipendenze, d: Domanda, emetti: (e: EventoFl
       for (const ch of r.chiamate) {
         const esito = await eseguiStrumento(ch.nome, ch.input, {
           db, fuso, vista: d.vista, messaggioLuigi: messaggio, conversazione: conv, aziende,
-          linkCalendario: dip.linkCalendario, emetti, fetchFn: dip.fetchFn, scritture, posta: dip.posta, calendarioApple: dip.calendarioApple,
+          linkCalendario: dip.linkCalendario, emetti, fetchFn: dip.fetchFn, scritture, posta: dip.posta, calendarioApple: dip.calendarioApple, whatsapp: dip.whatsapp,
         });
         risultati.push({ id: ch.id, contenuto: esito.contenuto, errore: esito.errore });
       }
@@ -263,8 +267,8 @@ export async function rispondi(dip: Dipendenze, d: Domanda, emetti: (e: EventoFl
   return chiudi();
 }
 
-/** Contesto che cambia a ogni turno: data, aziende collegate, posta, agenda locale, ricordi. Tutto marcato come dati. */
-export function contestoDelTurno(dip: Pick<Dipendenze, "db" | "fuso">, vista: Vista, aziende: AziendaCollegata[], posta?: DipendenzePosta): string {
+/** Contesto che cambia a ogni turno: data, aziende collegate, posta, WhatsApp, agenda locale, ricordi. Tutto marcato come dati. */
+export function contestoDelTurno(dip: Pick<Dipendenze, "db" | "fuso">, vista: Vista, aziende: AziendaCollegata[], posta?: DipendenzePosta, whatsapp?: DipendenzeWhatsapp): string {
   const ora = Date.now();
   const disponibile = aziende.length > 0 && vista !== "privato";
   const parti = [
@@ -284,6 +288,8 @@ export function contestoDelTurno(dip: Pick<Dipendenze, "db" | "fuso">, vista: Vi
     ? "Posta: caselle visibili in questa scheda (sola lettura e bozze; usa gli strumenti posta_*), divise per azienda o privato:"
     : "Posta: nessuna casella visibile in questa scheda.");
   if (riepilogoPosta) parti.push(riepilogoPosta);
+  const riepilogoWa = whatsapp ? riepilogoPerTurnoWa({ db: dip.db, fuso: dip.fuso, vista, aziende: whatsapp.aziende() }) : null;
+  if (riepilogoWa) parti.push("WhatsApp: chat di questa scheda (lettura; risposte solo con la conferma di Luigi; usa gli strumenti whatsapp_*), per azienda o privato:", riepilogoWa);
   parti.push(
     "Ricordi:",
     marcaDati("memoria", elencaMemorie(dip.db, vista).slice(0, 60).map((m) => `[${m.spazio}] ${m.testo}`)),

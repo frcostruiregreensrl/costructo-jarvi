@@ -663,7 +663,8 @@ test("permessi Fase 2: la bozza chiede SEMPRE conferma; calendari di lavoro mai 
   for (const v of ["privato", "lavoro", "tutto"] as const) {
     const nomi = strumentiPerVista(v).map((s) => s.nome);
     assert.ok(["posta_recenti", "posta_cerca", "posta_leggi", "posta_bozza"].every((n) => nomi.includes(n)), v);
-    assert.ok(!nomi.some((n) => /invia|manda|spedisci|cancella_mail|sposta/.test(n)), "nessuno strumento per inviare, spostare o cancellare mail");
+    // «(^|_)sposta»: «whatsapp_risposta» (Fase 3, sempre con conferma) contiene «sposta» ma non sposta mail.
+    assert.ok(!nomi.some((n) => /invia|manda|spedisci|cancella_mail|(^|_)sposta/.test(n)), "nessuno strumento per inviare, spostare o cancellare mail");
   }
   assert.ok(!strumentiPerVista("privato").some((s) => s.nome === "calendario_aziende_leggi"));
 });

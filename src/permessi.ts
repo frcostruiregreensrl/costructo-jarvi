@@ -1,9 +1,11 @@
-// Motore dei permessi (Fasi 1 e 2, autonomia livello 2).
+// Motore dei permessi (Fasi 1, 2 e 3, autonomia livello 2).
 // Regola d'oro: Jarvis legge Costructo, la posta e i calendari, e scrive solo nella propria agenda e nella propria memoria.
 // Ogni scrittura parte solo se l'ha chiesta Luigi nel messaggio del turno; altrimenti (per esempio se l'idea
 // arriva da un dato esterno) diventa una richiesta di conferma.
 // Fase 2: una bozza di risposta va nella cartella Bozze della casella (una scrittura FUORI da Jarvis): serve
 // SEMPRE la conferma di Luigi con il pulsante. Mandare email resta impossibile: non esiste nessuno strumento per farlo.
+// Fase 3: una risposta WhatsApp parte SOLO dopo la conferma di Luigi (pulsante o «sì, conferma» alla domanda appena fatta);
+// anche assegnare un contatto a un'azienda chiede sempre la conferma.
 import type { Vista, Spazio } from "./memorie.js";
 
 export type Azione =
@@ -17,16 +19,21 @@ export type Azione =
   | "interfaccia.numero"
   | "posta.leggi"
   | "posta.bozza"
-  | "calendario_aziende.leggi";
+  | "calendario_aziende.leggi"
+  | "whatsapp.leggi"
+  | "whatsapp.risposta"
+  | "whatsapp.assegna";
 
 export const AZIONI_FASE1: ReadonlySet<string> = new Set<Azione>([
   "costructo.leggi", "calendario.leggi", "agenda.leggi", "agenda.aggiungi", "agenda.cancella", "memoria.leggi", "memoria.salva", "interfaccia.numero",
   // Fase 2
   "posta.leggi", "posta.bozza", "calendario_aziende.leggi",
+  // Fase 3
+  "whatsapp.leggi", "whatsapp.risposta", "whatsapp.assegna",
 ]);
-export const SCRITTURE: ReadonlySet<Azione> = new Set<Azione>(["agenda.aggiungi", "agenda.cancella", "memoria.salva", "posta.bozza"]);
+export const SCRITTURE: ReadonlySet<Azione> = new Set<Azione>(["agenda.aggiungi", "agenda.cancella", "memoria.salva", "posta.bozza", "whatsapp.risposta", "whatsapp.assegna"]);
 /** Scritture fuori da Jarvis: chiedono SEMPRE la conferma di Luigi (pulsante), anche se l'ha chiesto lui. */
-export const SEMPRE_CONFERMA: ReadonlySet<Azione> = new Set<Azione>(["posta.bozza"]);
+export const SEMPRE_CONFERMA: ReadonlySet<Azione> = new Set<Azione>(["posta.bozza", "whatsapp.risposta", "whatsapp.assegna"]);
 
 export interface ContestoPermesso {
   vista: Vista;
@@ -60,6 +67,8 @@ export function controllaPermesso(azione: string, c: ContestoPermesso): Decision
   }
   if (!SCRITTURE.has(azione as Azione)) return { esito: "consentito" };
   const a = azione as Azione;
+  if (a === "whatsapp.risposta") return { esito: "conferma", motivo: "Messaggio WhatsApp: parte solo dopo la conferma di Luigi." };
+  if (a === "whatsapp.assegna") return { esito: "conferma", motivo: "Azienda di un contatto WhatsApp: decide Luigi." };
   if (SEMPRE_CONFERMA.has(a)) return { esito: "conferma", motivo: "Scrittura nella casella di posta: serve sempre la conferma di Luigi." };
   if (!haIntenzione(a, c.messaggioLuigi)) {
     return { esito: "conferma", motivo: "Luigi non l'ha chiesto in questo messaggio: serve la sua conferma." };
