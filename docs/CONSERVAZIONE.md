@@ -48,3 +48,12 @@ più completa; **Sostituita** = c'è un equivalente per una decisione di Luigi o
 
 **Nessuna funzione originale è persa.** Le differenze sono scelte di Luigi (Claude al posto di OpenAI/FreeLLMAPI,
 voci del dispositivo) o limiti di Apple (nessun ascolto in sottofondo su iPhone: «premi e parla» + Siri).
+
+## Fase 2: conservazione dei dati delle mail
+
+Non è una funzione dell'originale (che non leggeva la posta), ma vale la stessa regola delle conversazioni:
+**i dati delle mail restano in Jarvis al massimo 30 giorni**. La pulizia ogni 6 ore (`pulisciPostaVecchia` in
+`src/posta/archivio.ts`, chiamata da `src/server.ts`) cancella le mail salvate (intestazioni, testo breve di 4 KB,
+nomi degli allegati, riassunto, urgenza), le bozze e le tracce delle conferme automatiche più vecchie di 30 giorni.
+Le mail **sul server di posta** non vengono mai toccate: Jarvis non le cancella, non le sposta e non le segna come lette.
+Togliendo una casella dalle Impostazioni si cancellano subito anche le sue mail e bozze salvate in Jarvis.

@@ -145,7 +145,7 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#menu").hidden) { $("#menu").hidden = true; $("#apriMenu").focus(); } });
 addEventListener("hashchange", instrada);
 
-const PAGINE = ["home", "memoria", "registro", "spesa", "impostazioni"];
+const PAGINE = ["home", "posta", "memoria", "registro", "spesa", "impostazioni"];
 function instrada() {
   if ($("#app").hidden) return;
   let p = location.hash.replace("#", "") || "home";
@@ -157,6 +157,7 @@ function instrada() {
   if (a11yCambio) $("#principale").focus({ preventScroll: true });
   a11yCambio = true;
   $("#menu").hidden = true;
+  if (p === "posta") caricaPosta();
   if (p === "memoria") caricaMemorie();
   if (p === "registro") caricaRegistro(true);
   if (p === "spesa") caricaSpesa();
@@ -172,6 +173,7 @@ function impostaVista(v) {
   document.querySelectorAll("[data-vista]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.vista === v)));
   $("#dialogo").textContent = "";
   disegnaAdesso();
+  if (!$("#pagina-posta").hidden) caricaPosta();
 }
 document.querySelectorAll("[data-vista]").forEach((b) => b.addEventListener("click", () => impostaVista(b.dataset.vista)));
 
@@ -365,6 +367,9 @@ const NOMI_AZIONI = {
   "memoria.correggi": "Ricordo corretto", "memoria.cancella": "Ricordo cancellato", "interfaccia.numero": "Numero mostrato", "ai.chiamata": "Intelligenza artificiale",
   "impostazioni.modifica": "Impostazioni cambiate", "collegamenti.modifica": "Collegamenti cambiati", "notifica.briefing": "Notifica del briefing",
   "notifica.iscrizione": "Notifiche attivate", "conversazioni.pulizia": "Pulizia conversazioni (30 giorni)", "sicurezza.csrf": "Richiesta estranea bloccata", "server.errore": "Errore del server",
+  "posta.leggi": "Lettura della posta", "posta.classifica": "Riassunti della posta", "posta.bozza": "Bozza di risposta", "posta.caselle": "Caselle email cambiate",
+  "posta.conferma_automatica": "Conferma di ricezione automatica", "posta.pulizia": "Pulizia posta (30 giorni)", "notifica.posta": "Notifica mail urgente",
+  "calendario_aziende.leggi": "Lettura dei calendari di lavoro",
 };
 const NOMI_ESITI = { fatto: "Fatto", negato: "Bloccato", errore: "Errore", richiesta_conferma: "In attesa di conferma" };
 const NOMI_ORIGINI = { luigi: "da te", jarvis: "da Jarvis", sistema: "dal sistema" };
@@ -379,7 +384,7 @@ async function caricaRegistro(daCapo) {
       quando.dateTime = new Date(v.quando).toISOString();
       const titolo = crea("div");
       titolo.append(crea("b", "", NOMI_AZIONI[v.azione] || v.azione), document.createTextNode(` ${NOMI_ORIGINI[v.origine] || ""} · `), crea("span", "esito-voce", NOMI_ESITI[v.esito] || v.esito));
-      const det = v.dettagli?.motivo || v.dettagli?.strumento || v.dettagli?.percorso || "";
+      const det = v.dettagli?.motivo || v.dettagli?.strumento || v.dettagli?.percorso || [v.dettagli?.operazione, v.dettagli?.casella, v.dettagli?.dominio].filter(Boolean).join(" · ") || "";
       li.append(quando, titolo);
       if (det) li.append(crea("div", "dettagli", String(det)));
       lista.append(li);
@@ -434,6 +439,8 @@ async function caricaImpostazioni() {
     disegnaAziende(c.aziende || []);
     $("#colIcalStato").textContent = c.calendario ? "sì" : "no";
     aggiornaStatoNotifiche();
+    caricaCaselle();
+    caricaApple();
   } catch (e) { if (e instanceof NonAutenticato) mostraAccesso(); }
 }
 function riempiVoci(scelta) {
@@ -606,6 +613,389 @@ $("#provaCostructo").addEventListener("click", async () => {
     esito.className = r.ok ? "esito" : "esito male";
     esito.textContent = aziende[0] && r.ok ? `${aziende[0].nome}: collegamento riuscito.` : r.messaggio;
   }
+});
+
+// ------------------------------------------------------------------ Posta (Fase 2)
+// Jarvis legge le caselle in sola lettura: qui si vedono le mail divise per azienda e privato,
+// le urgenti evidenziate, il riassunto e il dettaglio. «Prepara bozza di risposta» mette una bozza
+// nella cartella Bozze della casella: NON la invia mai.
+const quando = (ms) => new Date(ms).toLocaleString("it-IT", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const NOMI_PEC = { messaggio: "PEC", accettazione: "Ricevuta PEC di accettazione", consegna: "Ricevuta PEC di consegna", non_accettazione: "PEC non accettata", mancata_consegna: "PEC non consegnata", presa_in_carico: "Ricevuta PEC", errore: "Errore PEC" };
+
+async function caricaPosta() {
+  const contenitore = $("#postaGruppi");
+  try {
+    const d = await api(`/api/posta/messaggi?vista=${stato.vista}&giorni=${$("#postaGiorni").value}${$("#postaUrgenti").checked ? "&soloUrgenti=1" : ""}`);
+    disegnaPosta(d);
+  } catch (e) {
+    if (e instanceof NonAutenticato) return mostraAccesso();
+    contenitore.replaceChildren(crea("p", "vuoto", "La posta non è disponibile in questo momento."));
+  }
+}
+function disegnaPosta(d) {
+  const contenitore = $("#postaGruppi");
+  contenitore.replaceChildren();
+  const avvisi = [];
+  if (d.senzaRiassuntoPerTetto) avvisi.push(`${d.senzaRiassuntoPerTetto} mail senza riassunto: tetto di spesa del mese raggiunto.`);
+  for (const c of d.caselle) if (c.stato.esito === "errore") avvisi.push(`${c.nome}: ${c.stato.messaggio}`);
+  $("#postaAvviso").textContent = avvisi.join(" · ");
+  if (!d.caselle.length && d.vista !== "tutto") {
+    contenitore.append(crea("p", "vuoto", d.vista === "privato" ? "Nessuna casella privata. Le caselle delle aziende sono nella scheda Lavoro." : "Nessuna casella di lavoro. Le caselle private sono nella scheda Privato."));
+    return;
+  }
+  if (!d.caselle.length) {
+    const p = crea("p", "vuoto", "Nessuna casella collegata. ");
+    const a = crea("a", "", "Aggiungila dalle Impostazioni");
+    a.href = "#impostazioni";
+    p.append(a, document.createTextNode("."));
+    contenitore.append(p);
+    return;
+  }
+  // Gruppi: prima le aziende (in ordine di nome), poi il privato.
+  const gruppi = new Map();
+  for (const c of d.caselle) if (!gruppi.has(c.spazio)) gruppi.set(c.spazio, { nome: c.nomeSpazio, privato: c.spazio === "privato", mail: [] });
+  for (const m of d.messaggi) gruppi.get(m.spazio)?.mail.push(m);
+  const ordinati = [...gruppi.values()].sort((a, b) => (a.privato - b.privato) || a.nome.localeCompare(b.nome, "it"));
+  for (const g of ordinati) {
+    const sezione = crea("section", `gruppo-posta ${g.privato ? "privato" : "lavoro"}`);
+    const titolo = crea("h2", "", g.nome);
+    const urgenti = g.mail.filter((m) => m.urgente).length;
+    if (urgenti) titolo.append(crea("span", "conteggio-urgenti", `${urgenti} ${urgenti === 1 ? "urgente" : "urgenti"}`));
+    sezione.append(titolo);
+    const lista = crea("ul", "lista-posta");
+    if (!g.mail.length) lista.append(crea("li", "vuoto", "Nessuna mail in questo periodo."));
+    for (const m of g.mail) lista.append(rigaPosta(m));
+    sezione.append(lista);
+    contenitore.append(sezione);
+  }
+}
+function rigaPosta(m) {
+  const li = crea("li", `posta-mail${m.urgente ? " urgente" : ""}${m.automatica ? " automatica" : ""}`);
+  const testa = crea("div", "posta-testa");
+  testa.append(crea("b", "posta-oggetto", m.oggetto || "(senza oggetto)"));
+  const etichette = crea("span", "etichette");
+  if (m.urgente) etichette.append(crea("span", "etichetta urgente", "Urgente"));
+  if (m.pec) etichette.append(crea("span", "etichetta pec", NOMI_PEC[m.pec] || "PEC"));
+  if (m.tocca) etichette.append(crea("span", "etichetta soldi", "Soldi o impegni"));
+  if (m.confermaAutomatica) etichette.append(crea("span", "etichetta", "Conferma automatica inviata"));
+  testa.append(etichette);
+  const meta = crea("small", "posta-meta", `${m.daNome || m.daIndirizzo} · ${m.casellaNome} · ${quando(m.data)}`);
+  const riassunto = crea("p", "posta-riassunto", m.riassunto || (m.stato === "tetto" ? "Senza riassunto (tetto di spesa raggiunto)." : "Riassunto in arrivo…"));
+  li.append(testa, meta, riassunto);
+  if (m.urgente && m.motivo) li.append(crea("p", "posta-motivo", `Perché è urgente: ${m.motivo}`));
+  const apri = crea("button", "secondario", "Apri");
+  apri.type = "button";
+  apri.setAttribute("aria-expanded", "false");
+  apri.setAttribute("aria-label", `Apri la mail «${m.oggetto || "senza oggetto"}» di ${m.daNome || m.daIndirizzo}`);
+  const dettaglio = crea("div", "posta-dettaglio");
+  dettaglio.hidden = true;
+  dettaglio.id = `dettaglio-${m.id}`;
+  apri.setAttribute("aria-controls", dettaglio.id);
+  apri.addEventListener("click", async () => {
+    const aperto = apri.getAttribute("aria-expanded") === "true";
+    apri.setAttribute("aria-expanded", String(!aperto));
+    apri.textContent = aperto ? "Apri" : "Chiudi";
+    dettaglio.hidden = aperto;
+    if (!aperto && !dettaglio.childElementCount) await riempiDettaglio(m.id, dettaglio);
+  });
+  li.append(apri, dettaglio);
+  return li;
+}
+async function riempiDettaglio(id, box) {
+  box.replaceChildren(crea("p", "vuoto", "Carico…"));
+  let m;
+  try { m = await api(`/api/posta/messaggi/${encodeURIComponent(id)}`); } catch (e) {
+    if (e instanceof NonAutenticato) return mostraAccesso();
+    box.replaceChildren(crea("p", "vuoto", e.message));
+    return;
+  }
+  box.replaceChildren();
+  box.append(crea("p", "posta-meta", `Da: ${m.daNome ? `${m.daNome} <${m.daIndirizzo}>` : m.daIndirizzo} · A: ${m.a || "—"} · ${m.nomeSpazio} · casella ${m.casellaNome}`));
+  box.append(crea("div", "estratto", m.estratto || "(nessun testo)"));
+  if (m.allegati?.length) {
+    const ul = crea("ul", "allegati");
+    for (const a of m.allegati) ul.append(crea("li", "", `${a.nome} (${Math.max(1, Math.round(a.dimensione / 1024))} KB)`));
+    box.append(crea("p", "sottotitolo", "Allegati (solo il nome: aprili dalla tua app di posta)"), ul);
+  }
+  for (const b of m.bozze || []) {
+    box.append(crea("p", "nota-bozza", `Bozza del ${quando(b.creata)}: ${b.stato === "in_bozze" ? "nella cartella Bozze" : `salvata solo in Jarvis (${b.dettaglio})`}.`));
+  }
+  const prepara = crea("button", "primario", "Prepara bozza di risposta");
+  prepara.type = "button";
+  const zona = crea("div", "zona-bozza");
+  prepara.addEventListener("click", () => apriBozza(m, zona, prepara));
+  box.append(prepara, zona);
+}
+async function apriBozza(m, zona, pulsante) {
+  pulsante.disabled = true;
+  zona.replaceChildren(crea("p", "vuoto", "Jarvis prepara il testo…"));
+  let testo = "";
+  try { testo = (await api(`/api/posta/messaggi/${encodeURIComponent(m.id)}/bozza/proponi`, { metodo: "POST", corpo: {} })).testo; } catch (e) {
+    if (e instanceof NonAutenticato) return mostraAccesso();
+    zona.replaceChildren(crea("p", "esito male", e.message));
+  }
+  const id = `bozza-${m.id}`;
+  const etichetta = crea("label", "", `Bozza per ${m.rispondiA} — «${m.oggettoRisposta}»`);
+  etichetta.htmlFor = id;
+  const area = crea("textarea", "testo-bozza");
+  area.id = id;
+  area.value = testo;
+  area.rows = 8;
+  area.maxLength = 5000;
+  const nota = crea("p", "aiuto", "Correggi il testo se serve. Jarvis NON invia la mail: la mette nella cartella Bozze della casella e la mandi tu dalla tua app di posta.");
+  const metti = crea("button", "primario", "Metti nelle Bozze");
+  metti.type = "button";
+  const annulla = crea("button", "secondario", "Annulla");
+  annulla.type = "button";
+  const esito = crea("p", "esito");
+  esito.setAttribute("role", "status");
+  annulla.addEventListener("click", () => { zona.replaceChildren(); pulsante.disabled = false; pulsante.focus(); });
+  metti.addEventListener("click", async () => {
+    if (!area.value.trim()) { esito.className = "esito male"; esito.textContent = "Scrivi il testo della bozza."; return; }
+    metti.disabled = true;
+    try {
+      const r = await api(`/api/posta/messaggi/${encodeURIComponent(m.id)}/bozza`, { metodo: "POST", corpo: { testo: area.value } });
+      esito.className = r.inBozze ? "esito" : "esito male";
+      esito.textContent = r.messaggio;
+      pulsante.disabled = false;
+    } catch (e) {
+      if (e instanceof NonAutenticato) return mostraAccesso();
+      esito.className = "esito male"; esito.textContent = e.message; metti.disabled = false;
+    }
+  });
+  const azioni = crea("div", "azioni-modulo");
+  azioni.append(metti, annulla);
+  if (zona.firstChild?.classList?.contains("vuoto")) zona.replaceChildren();
+  zona.append(etichetta, area, nota, azioni, esito);
+  area.focus();
+}
+$("#postaGiorni").addEventListener("change", caricaPosta);
+$("#postaUrgenti").addEventListener("change", caricaPosta);
+$("#postaAggiorna").addEventListener("click", async () => {
+  const b = $("#postaAggiorna"), st = $("#postaStato");
+  b.disabled = true;
+  st.className = "esito"; st.textContent = "Controllo le caselle…";
+  try {
+    const r = await api("/api/posta/aggiorna", { metodo: "POST", corpo: {} });
+    st.className = r.ok ? "esito" : "esito male"; st.textContent = r.messaggio;
+    await caricaPosta();
+  } catch (e) {
+    if (e instanceof NonAutenticato) return mostraAccesso();
+    st.className = "esito male"; st.textContent = e.message;
+  } finally { b.disabled = false; }
+});
+
+// ------------------------------------------------------------------ Impostazioni → Caselle email
+const AIUTO_PRESET = {
+  gmail: "Gmail: serve una «password per le app», non la password normale. Vai su myaccount.google.com → Sicurezza (la verifica in due passaggi deve essere attiva) → «Password per le app», creane una chiamata «Jarvis» e copiala qui. Server già impostati.",
+  pec: "PEC Aruba: usa l'indirizzo PEC completo e la password della PEC. Server già impostati. Jarvis legge e prepara bozze, ma dalla PEC non manda mai niente.",
+  altro: "Altro: scrivi i server della tua posta (devono avere un nome pubblico, per esempio imap.esempio.it). Il collegamento è sempre cifrato (TLS).",
+};
+const statoCaselle = { tipo: "gmail", modifica: null, dati: null };
+function scegliPreset(tipo) {
+  statoCaselle.tipo = tipo;
+  document.querySelectorAll("[data-preset]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.preset === tipo)));
+  $("#aiutoPreset").textContent = AIUTO_PRESET[tipo];
+  $("#casServer").hidden = tipo !== "altro";
+  $("#casImapHost").required = tipo === "altro";
+  $("#rigaConfermeCasella").hidden = tipo === "pec";
+  $("#notaPec").hidden = tipo !== "pec";
+  $("#etichettaPassword").textContent = tipo === "gmail" ? "Password per le app (16 lettere)" : tipo === "pec" ? "Password della PEC" : "Password";
+  $("#casUtente").type = tipo === "altro" ? "text" : "email";
+  if (tipo === "pec") $("#casConferme").checked = false;
+}
+document.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => scegliPreset(b.dataset.preset)));
+scegliPreset("gmail");
+
+async function caricaCaselle() {
+  try { disegnaCaselle(await api("/api/posta/caselle")); } catch (e) { if (e instanceof NonAutenticato) mostraAccesso(); }
+}
+function riempiSpazi(select, aziende, scelta) {
+  select.replaceChildren();
+  for (const a of aziende) { const o = crea("option", "", a.nome); o.value = a.id; select.append(o); }
+  const p = crea("option", "", "Privato"); p.value = "privato"; select.append(p);
+  select.value = scelta && [...select.options].some((o) => o.value === scelta) ? scelta : select.options[0]?.value ?? "privato";
+}
+function disegnaCaselle(d) {
+  statoCaselle.dati = d;
+  $("#impConferme").checked = !!d.confermeAutomaticheAttive;
+  riempiSpazi($("#casSpazio"), d.aziende, statoCaselle.modifica?.spazio ?? $("#casSpazio").value);
+  const lista = $("#listaCaselle");
+  lista.replaceChildren();
+  if (!d.caselle.length) { lista.append(crea("li", "vuoto", "Nessuna casella collegata.")); return; }
+  const nomiTipo = { gmail: "Gmail", pec: "PEC", altro: "Altro" };
+  for (const c of d.caselle) {
+    const li = crea("li", c.spazio === "privato" ? "privato" : "");
+    const info = crea("span", "nome-azienda", c.nome);
+    info.append(crea("small", "", `${nomiTipo[c.tipo]} · ${c.nomeSpazio} · ${c.utente}`));
+    const stato = c.stato.ultimoControllo
+      ? `${c.stato.esito === "errore" ? "Errore: " : "Ultimo controllo "}${c.stato.esito === "errore" ? c.stato.messaggio : `${quando(c.stato.ultimoControllo)} (${c.stato.messaggio})`}`
+      : "Non ancora controllata";
+    const riga = crea("small", `stato-casella${c.stato.esito === "errore" ? " male" : ""}`, stato);
+    if (c.confermeAutomatiche) riga.append(document.createTextNode(" · conferme automatiche permesse"));
+    info.append(document.createElement("br"), riga);
+    const azioni = crea("span", "azioni-azienda");
+    const bottone = (testo, etichetta, fn) => { const b = crea("button", "secondario", testo); b.type = "button"; b.setAttribute("aria-label", `${etichetta} ${c.nome}`); b.addEventListener("click", fn); return b; };
+    azioni.append(
+      bottone("Prova", "Prova la casella", async () => {
+        const esito = $("#esitoCaselle");
+        esito.className = "esito"; esito.textContent = `Provo ${c.nome}…`;
+        const r = await api(`/api/posta/caselle/${encodeURIComponent(c.id)}/prova`, { metodo: "POST", corpo: {} }).catch((e) => ({ ok: false, messaggio: e.message }));
+        esito.className = r.ok ? "esito" : "esito male"; esito.textContent = r.messaggio;
+      }),
+      bottone("Modifica", "Modifica la casella", () => iniziaModifica(c)),
+      bottone("Rimuovi", "Rimuovi la casella", async () => {
+        if (!confirm(`Vuoi scollegare «${c.nome}» da Jarvis? La password e le mail salvate in Jarvis vengono cancellate; nella casella non cambia niente.`)) return;
+        const esito = $("#esitoCaselle");
+        try { disegnaCaselle(await api(`/api/posta/caselle/${encodeURIComponent(c.id)}`, { metodo: "DELETE" })); esito.className = "esito"; esito.textContent = `${c.nome} scollegata.`; }
+        catch (e) { esito.className = "esito male"; esito.textContent = e.message; }
+      }),
+    );
+    li.append(info, azioni);
+    lista.append(li);
+  }
+}
+function iniziaModifica(c) {
+  statoCaselle.modifica = c;
+  scegliPreset(c.tipo);
+  $("#casNome").value = c.nome;
+  riempiSpazi($("#casSpazio"), statoCaselle.dati.aziende, c.spazio);
+  $("#casUtente").value = c.utente;
+  $("#casPassword").value = "";
+  $("#casPassword").placeholder = "lascia vuoto per non cambiarla";
+  $("#casImapHost").value = c.imap?.host ?? "";
+  $("#casImapPorta").value = c.imap?.porta ?? 993;
+  $("#casSmtpHost").value = c.smtp?.host ?? "";
+  $("#casSmtpPorta").value = c.smtp?.porta ?? 465;
+  $("#casConferme").checked = c.confermeAutomatiche;
+  $("#casSalva").textContent = "Salva le modifiche";
+  $("#casAnnulla").hidden = false;
+  $("#titoloNuovaCasella").textContent = `Modifica «${c.nome}»`;
+  $("#casNome").focus();
+}
+function fineModifica() {
+  statoCaselle.modifica = null;
+  $("#formCasella").reset();
+  $("#casPassword").placeholder = "";
+  $("#casSalva").textContent = "Prova e aggiungi";
+  $("#casAnnulla").hidden = true;
+  $("#titoloNuovaCasella").textContent = "Aggiungi una casella";
+  scegliPreset(statoCaselle.tipo);
+  if (statoCaselle.dati) riempiSpazi($("#casSpazio"), statoCaselle.dati.aziende);
+}
+$("#casAnnulla").addEventListener("click", fineModifica);
+$("#formCasella").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const esito = $("#esitoCaselle");
+  const tipo = statoCaselle.tipo;
+  const corpo = {
+    nome: $("#casNome").value.trim(), tipo, spazio: $("#casSpazio").value, utente: $("#casUtente").value.trim(),
+    confermeAutomatiche: tipo !== "pec" && $("#casConferme").checked,
+  };
+  const password = $("#casPassword").value;
+  if (password) corpo.password = password;
+  if (tipo === "altro") {
+    corpo.imap = { host: $("#casImapHost").value.trim(), porta: Number($("#casImapPorta").value) || 993 };
+    if ($("#casSmtpHost").value.trim()) corpo.smtp = { host: $("#casSmtpHost").value.trim(), porta: Number($("#casSmtpPorta").value) || 465 };
+  }
+  const modifica = statoCaselle.modifica;
+  if (!modifica && !password) { esito.className = "esito male"; esito.textContent = "Scrivi la password."; $("#casPassword").focus(); return; }
+  const bottone = $("#casSalva");
+  bottone.disabled = true;
+  esito.className = "esito"; esito.textContent = "Provo l'accesso alla casella…";
+  try {
+    const d = modifica
+      ? await api(`/api/posta/caselle/${encodeURIComponent(modifica.id)}`, { metodo: "PATCH", corpo })
+      : await api("/api/posta/caselle", { metodo: "POST", corpo });
+    esito.className = "esito"; esito.textContent = modifica ? "Casella aggiornata." : `Casella collegata: ${corpo.nome}.`;
+    fineModifica();
+    disegnaCaselle(d);
+  } catch (err) {
+    if (err instanceof NonAutenticato) return mostraAccesso();
+    esito.className = "esito male"; esito.textContent = err.message;
+  } finally {
+    bottone.disabled = false;
+    $("#casPassword").value = "";
+  }
+});
+$("#impConferme").addEventListener("change", async (e) => {
+  const attiva = e.target.checked;
+  const esito = $("#esitoConferme");
+  if (attiva && !confirm("Attivare le conferme di ricezione automatiche? Partono solo dalle caselle dove le hai permesse, mai dalle PEC e mai quando la mail parla di soldi o impegni.")) { e.target.checked = false; return; }
+  try {
+    await api("/api/impostazioni", { metodo: "PUT", corpo: { confermeAutomaticheAttive: attiva } });
+    esito.className = "esito"; esito.textContent = attiva ? "Conferme automatiche attive." : "Conferme automatiche spente.";
+  } catch (err) { e.target.checked = !attiva; esito.className = "esito male"; esito.textContent = err.message; }
+});
+
+// ------------------------------------------------------------------ Impostazioni → Calendario Apple
+async function caricaApple() {
+  try { disegnaApple(await api("/api/calendario-apple")); } catch (e) { if (e instanceof NonAutenticato) mostraAccesso(); }
+}
+function disegnaApple(d) {
+  $("#appleStato").textContent = d.collegato ? `sì (${d.appleId})` : "no";
+  if (d.collegato) $("#appleId").value = d.appleId;
+  $("#appleScollega").hidden = !d.collegato;
+  $("#appleProva").hidden = !d.collegato;
+  const lista = $("#listaCalendariApple");
+  lista.replaceChildren();
+  $("#appleSalvaScelta").hidden = !d.calendari.length;
+  if (!d.collegato) { lista.append(crea("li", "vuoto", "Collega prima l'account Apple.")); return; }
+  if (!d.calendari.length) { lista.append(crea("li", "vuoto", "Nessun calendario trovato.")); return; }
+  d.calendari.forEach((c, i) => {
+    const li = crea("li");
+    li.dataset.url = c.url;
+    const spunta = crea("label", "spunta");
+    const box = crea("input");
+    box.type = "checkbox";
+    box.checked = c.incluso;
+    box.className = "usa-calendario";
+    const pallino = crea("span", "pallino");
+    if (c.colore) pallino.style.background = c.colore;
+    spunta.append(box, pallino, document.createTextNode(c.nome));
+    const sel = crea("select", "spazio-calendario");
+    sel.id = `spazioCal${i}`;
+    sel.setAttribute("aria-label", `Il calendario «${c.nome}» è di`);
+    riempiSpazi(sel, d.aziende, c.spazio);
+    li.append(spunta, sel);
+    lista.append(li);
+  });
+}
+$("#formApple").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const esito = $("#esitoApple");
+  const appleId = $("#appleId").value.trim(), password = $("#applePassword").value;
+  if (!appleId || !password) { esito.className = "esito male"; esito.textContent = "Scrivi l'Apple ID e la password specifica per le app."; return; }
+  esito.className = "esito"; esito.textContent = "Mi collego a iCloud…";
+  try {
+    disegnaApple(await api("/api/calendario-apple", { metodo: "PUT", corpo: { appleId, password } }));
+    esito.className = "esito"; esito.textContent = "Calendario Apple collegato: scegli qui sotto quali calendari usare.";
+  } catch (err) {
+    if (err instanceof NonAutenticato) return mostraAccesso();
+    esito.className = "esito male"; esito.textContent = err.message;
+  } finally { $("#applePassword").value = ""; }
+});
+$("#appleSalvaScelta").addEventListener("click", async () => {
+  const esito = $("#esitoApple");
+  const calendari = [...document.querySelectorAll("#listaCalendariApple li[data-url]")].map((li) => ({
+    url: li.dataset.url, incluso: li.querySelector(".usa-calendario").checked, spazio: li.querySelector(".spazio-calendario").value,
+  }));
+  try {
+    disegnaApple(await api("/api/calendario-apple/calendari", { metodo: "PUT", corpo: { calendari } }));
+    esito.className = "esito"; esito.textContent = "Scelta salvata.";
+    caricaBriefing();
+  } catch (err) { esito.className = "esito male"; esito.textContent = err.message; }
+});
+$("#appleProva").addEventListener("click", async () => {
+  const esito = $("#esitoApple");
+  esito.className = "esito"; esito.textContent = "Provo il collegamento…";
+  const r = await api("/api/calendario-apple/prova", { metodo: "POST", corpo: {} }).catch((e) => ({ ok: false, messaggio: e.message }));
+  esito.className = r.ok ? "esito" : "esito male"; esito.textContent = r.messaggio;
+});
+$("#appleScollega").addEventListener("click", async () => {
+  if (!confirm("Scollegare il calendario Apple? Apple ID e password specifica vengono cancellati da Jarvis.")) return;
+  try { disegnaApple(await api("/api/calendario-apple", { metodo: "DELETE" })); $("#appleId").value = ""; $("#esitoApple").className = "esito"; $("#esitoApple").textContent = "Calendario Apple scollegato."; caricaBriefing(); }
+  catch (err) { $("#esitoApple").className = "esito male"; $("#esitoApple").textContent = err.message; }
 });
 
 // ------------------------------------------------------------------ notifiche push

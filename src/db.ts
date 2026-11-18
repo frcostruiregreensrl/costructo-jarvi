@@ -98,6 +98,67 @@ CREATE TABLE IF NOT EXISTS iscrizioni_push (
   dati TEXT NOT NULL,
   creata INTEGER NOT NULL
 );
+
+-- Fase 2: posta. Le caselle (con le password) stanno nel segreto cifrato «posta_caselle».
+-- Qui solo lo stato della lettura e i dati delle mail, tenuti al massimo 30 giorni.
+CREATE TABLE IF NOT EXISTS posta_stato (
+  casella_id TEXT PRIMARY KEY,
+  uid_validity TEXT NOT NULL DEFAULT '',
+  ultimo_uid INTEGER NOT NULL DEFAULT 0,
+  ultimo_controllo INTEGER NOT NULL DEFAULT 0,
+  esito TEXT NOT NULL DEFAULT '',          -- '' | 'ok' | 'errore'
+  messaggio TEXT NOT NULL DEFAULT '',
+  ultima_notifica INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS posta_messaggi (
+  id TEXT PRIMARY KEY,
+  casella_id TEXT NOT NULL,
+  uid INTEGER NOT NULL,
+  uid_validity TEXT NOT NULL,
+  message_id TEXT NOT NULL DEFAULT '',
+  riferimenti TEXT NOT NULL DEFAULT '',     -- References della mail, per la bozza di risposta
+  da_nome TEXT NOT NULL DEFAULT '',
+  da_indirizzo TEXT NOT NULL DEFAULT '',
+  rispondi_a TEXT NOT NULL DEFAULT '',
+  a TEXT NOT NULL DEFAULT '',
+  oggetto TEXT NOT NULL DEFAULT '',
+  data INTEGER NOT NULL,
+  estratto TEXT NOT NULL DEFAULT '',        -- testo breve (al massimo 4 KB), senza HTML
+  allegati TEXT NOT NULL DEFAULT '[]',      -- solo nomi e dimensioni
+  segni TEXT NOT NULL DEFAULT '{}',         -- lista, automatico, no-reply, PEC (ricevute)
+  spazio TEXT NOT NULL,                     -- id dell'azienda o 'privato' (dalla casella)
+  stato TEXT NOT NULL DEFAULT 'da_classificare' CHECK (stato IN ('da_classificare','classificato','filtrato','tetto','errore')),
+  riassunto TEXT NOT NULL DEFAULT '',
+  urgente INTEGER NOT NULL DEFAULT 0,
+  motivo TEXT NOT NULL DEFAULT '',
+  tocca INTEGER NOT NULL DEFAULT 0,         -- parla di pagamenti, importi o impegni
+  tentativi INTEGER NOT NULL DEFAULT 0,
+  nuova INTEGER NOT NULL DEFAULT 0,         -- arrivata dopo il primo controllo (solo queste possono avere la conferma automatica)
+  conferma_auto TEXT NOT NULL DEFAULT '',   -- '' | 'inviata' | 'saltata: motivo'
+  notificata INTEGER NOT NULL DEFAULT 0,
+  salvato INTEGER NOT NULL,
+  UNIQUE (casella_id, uid_validity, uid)
+);
+CREATE INDEX IF NOT EXISTS posta_data ON posta_messaggi(data);
+CREATE INDEX IF NOT EXISTS posta_stato_idx ON posta_messaggi(stato);
+CREATE TABLE IF NOT EXISTS posta_bozze (
+  id TEXT PRIMARY KEY,
+  messaggio_id TEXT NOT NULL,
+  casella_id TEXT NOT NULL,
+  a TEXT NOT NULL,
+  oggetto TEXT NOT NULL,
+  testo TEXT NOT NULL,
+  creata INTEGER NOT NULL,
+  stato TEXT NOT NULL CHECK (stato IN ('salvata','in_bozze','errore')),
+  dettaglio TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS posta_risposte_auto (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  casella_id TEXT NOT NULL,
+  mittente TEXT NOT NULL,                   -- impronta dell'indirizzo (non l'indirizzo)
+  dominio TEXT NOT NULL,
+  quando INTEGER NOT NULL
+);
 `;
 
 export function apriDb(file: string): Db {

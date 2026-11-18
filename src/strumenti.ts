@@ -1,4 +1,4 @@
-// Strumenti che l'AI può usare in Fase 1. Ogni chiamata: validazione (zod) → permesso → esecuzione → registro.
+// Strumenti che l'AI può usare (Fasi 1 e 2). Ogni chiamata: validazione (zod) → controllo → permesso → esecuzione → registro.
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Db } from "./db.js";
@@ -12,7 +12,12 @@ import { aggiungiMemoria, elencaMemorie, type Spazio, type Vista } from "./memor
 import { controllaPermesso, SCRITTURE, type Azione } from "./permessi.js";
 import { registra } from "./registro.js";
 import { scaricaCalendario, occorrenze } from "./calendario.js";
+import type { EventoApple } from "./calendarioApple.js";
 import { inizioGiorno, oraMinuti, descriviGiorno } from "./tempo.js";
+import type { DipendenzePosta } from "./posta/tipi.js";
+import { elencoPerAi, leggiPerAi, mailPerBozza, type ContestoPosta } from "./posta/strumentiPosta.js";
+import { creaBozza, oggettoRisposta, destinatarioRisposta, MAX_TESTO_BOZZA } from "./posta/bozze.js";
+import { nomeSpazio } from "./posta/caselle.js";
 
 export type EventoFlusso =
   | { tipo: "delta"; testo: string }
@@ -42,6 +47,10 @@ export interface ContestoStrumenti {
   fetchFn?: typeof fetch;
   /** Scritture già fatte in questo turno, per tipo di azione (una sola cancellazione senza conferma). */
   scritture?: Map<string, number>;
+  /** Fase 2: posta (caselle, archivio, bozze). Assente = nessuna casella. */
+  posta?: DipendenzePosta;
+  /** Fase 2: eventi dei calendari Apple scelti (con lo spazio: privato o id dell'azienda). */
+  calendarioApple?: (da: number, a: number) => Promise<{ eventi: EventoApple[]; avvisi: string[] }>;
 }
 
 const oggetto = (properties: Record<string, unknown>) => ({ type: "object", properties, required: Object.keys(properties), additionalProperties: false });
@@ -55,6 +64,10 @@ interface Strumento<S extends z.ZodTypeAny> {
   spazio?: (i: z.infer<S>) => Spazio | undefined;
   /** Oggetto della scrittura (titolo o testo), da ritrovare nel messaggio di Luigi. */
   oggetto?: (i: z.infer<S>) => string;
+  /** Controllo prima del permesso (es. la mail esiste ed è visibile): un testo = errore da dare all'AI. */
+  verifica?: (i: z.infer<S>, c: ContestoStrumenti) => string | null;
+  /** Cosa scrivere nel registro al posto dell'input (per non salvare testi delle mail o delle bozze). */
+  perRegistro?: (i: z.infer<S>) => Record<string, unknown>;
   esegui: (i: z.infer<S>, c: ContestoStrumenti) => Promise<string> | string;
 }
 function strumento<S extends z.ZodTypeAny>(s: Strumento<S>): Strumento<S> { return s; }
@@ -129,6 +142,22 @@ async function daCostructo(c: ContestoStrumenti, richiesta: string | undefined, 
       ? { azienda: scelte[i].nome, percorso: e.value.percorso, dati: e.value.dati }
       : { azienda: scelte[i].nome, errore: errore(e) }),
   });
+}
+
+/** Contesto per la posta (null se non ci sono le dipendenze della posta). */
+function contestoPosta(c: ContestoStrumenti): ContestoPosta | null {
+  if (!c.posta) return null;
+  return { db: c.db, cifratore: c.posta.cifratore, fuso: c.fuso, vista: c.vista, aziende: c.posta.aziende() };
+}
+const SENZA_POSTA = "Nessuna casella email collegata: dillo a Luigi in una frase (si collegano da Impostazioni → Caselle email).";
+const campoTesto = (descrizione: string) => ({ type: "string", description: descrizione });
+
+/** Eventi Apple dei prossimi giorni filtrati per spazio, pronti per l'AI. */
+async function eventiAppleDi(c: ContestoStrumenti, giorni: number, filtro: (spazio: string) => boolean) {
+  if (!c.calendarioApple) return { eventi: [] as EventoApple[], avvisi: [] as string[] };
+  const da = inizioGiorno(Date.now(), c.fuso);
+  const r = await c.calendarioApple(da, da + giorni * 864e5);
+  return { eventi: r.eventi.filter((e) => filtro(e.spazio)), avvisi: r.avvisi };
 }
 
 export const STRUMENTI = [
@@ -256,10 +285,118 @@ export const STRUMENTI = [
     azione: "calendario.leggi", viste: ["privato", "tutto"], input: z.object({ giorni: z.number().int().min(1).max(30) }).strict(),
     esegui: async (i, c) => {
       const link = c.linkCalendario();
-      if (!link) return "Nessun calendario personale collegato.";
+      if (!link && !c.calendarioApple) return "Nessun calendario personale collegato.";
+      const apple = await eventiAppleDi(c, i.giorni, (spazio) => spazio === "privato");
       const da = inizioGiorno(Date.now(), c.fuso);
-      const ev = occorrenze(await scaricaCalendario(link, { fetchFn: c.fetchFn }), da, da + i.giorni * 864e5, c.fuso).slice(0, 60);
-      return marcaDati("calendario", ev.map((e) => ({ giorno: descriviGiorno(e.inizio, c.fuso), ora: e.tuttoIlGiorno ? "tutto il giorno" : oraMinuti(e.inizio, c.fuso), titolo: e.titolo, luogo: e.luogo })));
+      const ev = link ? occorrenze(await scaricaCalendario(link, { fetchFn: c.fetchFn }), da, da + i.giorni * 864e5, c.fuso) : [];
+      const tutti = [...ev.map((e) => ({ ...e, calendario: "link iCal" })), ...apple.eventi].sort((x, y) => x.inizio - y.inizio).slice(0, 60);
+      return marcaDati("calendario", {
+        eventi: tutti.map((e) => ({ giorno: descriviGiorno(e.inizio, c.fuso), ora: e.tuttoIlGiorno ? "tutto il giorno" : oraMinuti(e.inizio, c.fuso), titolo: e.titolo, luogo: e.luogo, calendario: e.calendario })),
+        ...(apple.avvisi.length ? { avvisi: apple.avvisi } : {}),
+      });
+    },
+  }),
+  strumento({
+    def: {
+      nome: "calendario_aziende_leggi",
+      descrizione: "Legge i calendari Apple che Luigi ha assegnato alle sue aziende (sola lettura). Ogni evento dice di quale azienda è.",
+      schema: oggetto({ giorni, azienda }),
+    },
+    azione: "calendario_aziende.leggi", viste: ["lavoro", "tutto"], input: z.object({ giorni: z.number().int().min(1).max(30), azienda: campoAzienda }).strict(),
+    esegui: async (i, c) => {
+      if (!c.calendarioApple) return "Nessun calendario Apple collegato.";
+      const elenco = c.posta?.aziende() ?? (c.aziende ?? []).map((a) => ({ id: a.id, nome: a.nome }));
+      let scelte = elenco;
+      if (i.azienda?.trim()) {
+        scelte = trovaAziende(elenco, i.azienda);
+        if (scelte.length !== 1) return `Non è chiaro di quale azienda parla Luigi: chiediglielo.\n${marcaDati("aziende", { domandaSuggerita: `Di quale azienda parli: ${nomiAziende(elenco)}?` })}`;
+      }
+      const ids = new Set(scelte.map((a) => a.id));
+      const r = await eventiAppleDi(c, i.giorni, (spazio) => ids.has(spazio));
+      return marcaDati("calendario", {
+        nota: "Di' sempre di quale azienda è ogni evento.",
+        eventi: r.eventi.slice(0, 60).map((e) => ({ azienda: nomeSpazio(e.spazio, elenco), calendario: e.calendario, giorno: descriviGiorno(e.inizio, c.fuso), ora: e.tuttoIlGiorno ? "tutto il giorno" : oraMinuti(e.inizio, c.fuso), titolo: e.titolo, luogo: e.luogo })),
+        ...(r.avvisi.length ? { avvisi: r.avvisi } : {}),
+      });
+    },
+  }),
+  // ------------------------------------------------------------ posta (Fase 2): lettura e bozze, MAI invio
+  strumento({
+    def: {
+      nome: "posta_recenti",
+      descrizione: "Elenca le email recenti delle caselle di Luigi con riassunto e urgenza. Ogni mail dice a quale azienda (o al privato) e a quale casella appartiene.",
+      schema: oggetto({
+        casella: campoTesto("Nome della casella, se Luigi lo dice; altrimenti stringa vuota"),
+        azienda: campoTesto("Azienda (o «privato») di cui parla Luigi; stringa vuota per tutte quelle visibili"),
+        soloUrgenti: { type: "boolean", description: "true per vedere solo le mail urgenti" },
+        giorni: { type: "integer", description: "Quanti giorni indietro guardare (1-30)" },
+      }),
+    },
+    azione: "posta.leggi", viste: ["privato", "lavoro", "tutto"],
+    input: z.object({ casella: z.string().max(80), azienda: z.string().max(80), soloUrgenti: z.boolean(), giorni: z.number().int().min(1).max(30) }).strict(),
+    perRegistro: (i) => ({ soloUrgenti: i.soloUrgenti, giorni: i.giorni }),
+    esegui: (i, c) => {
+      const p = contestoPosta(c);
+      return p ? elencoPerAi(p, { casella: i.casella, azienda: i.azienda, soloUrgenti: i.soloUrgenti, giorni: i.giorni }) : SENZA_POSTA;
+    },
+  }),
+  strumento({
+    def: {
+      nome: "posta_cerca",
+      descrizione: "Cerca tra le email salvate da Jarvis (ultimi 30 giorni) per mittente, oggetto o testo.",
+      schema: oggetto({
+        testo: campoTesto("Parole da cercare (mittente, oggetto o testo)"),
+        azienda: campoTesto("Azienda (o «privato»), se Luigi la dice; altrimenti stringa vuota"),
+        giorni: { type: "integer", description: "Quanti giorni indietro guardare (1-30)" },
+      }),
+    },
+    azione: "posta.leggi", viste: ["privato", "lavoro", "tutto"],
+    input: z.object({ testo: z.string().min(1).max(200), azienda: z.string().max(80), giorni: z.number().int().min(1).max(30) }).strict(),
+    perRegistro: (i) => ({ giorni: i.giorni }),
+    esegui: (i, c) => {
+      const p = contestoPosta(c);
+      return p ? elencoPerAi(p, { testo: i.testo, azienda: i.azienda, giorni: i.giorni }) : SENZA_POSTA;
+    },
+  }),
+  strumento({
+    def: {
+      nome: "posta_leggi",
+      descrizione: "Legge una email: per id (dagli elenchi) oppure cercando il mittente. Se il mittente corrisponde a mail di aziende diverse, chiedi a Luigi quale.",
+      schema: oggetto({
+        id: campoTesto("Id della mail (dagli elenchi), oppure stringa vuota"),
+        mittente: campoTesto("Mittente o oggetto detto da Luigi, se non c'è l'id; altrimenti stringa vuota"),
+        azienda: campoTesto("Azienda (o «privato»), se Luigi la dice; altrimenti stringa vuota"),
+      }),
+    },
+    azione: "posta.leggi", viste: ["privato", "lavoro", "tutto"],
+    input: z.object({ id: z.string().max(40), mittente: z.string().max(200), azienda: z.string().max(80) }).strict(),
+    perRegistro: (i) => ({ mail: i.id || undefined }),
+    esegui: (i, c) => {
+      const p = contestoPosta(c);
+      return p ? leggiPerAi(p, i) : SENZA_POSTA;
+    },
+  }),
+  strumento({
+    def: {
+      nome: "posta_bozza",
+      descrizione: "Prepara una BOZZA di risposta a una email: la salva in Jarvis e nella cartella Bozze della casella. NON la invia: la manda Luigi dalla sua app di posta. Serve sempre la conferma di Luigi.",
+      schema: oggetto({
+        id: campoTesto("Id della mail a cui rispondere"),
+        testo: campoTesto("Testo della bozza, in italiano, cortese e breve. Niente promesse di pagamenti, importi, date o impegni: dove servono scrivi [da completare]"),
+      }),
+    },
+    azione: "posta.bozza", viste: ["privato", "lavoro", "tutto"],
+    input: z.object({ id: z.string().min(1).max(40), testo: z.string().min(1).max(MAX_TESTO_BOZZA) }).strict(),
+    verifica: (i, c) => {
+      const p = contestoPosta(c);
+      if (!p) return SENZA_POSTA;
+      return mailPerBozza(p, i.id).errore ?? null;
+    },
+    perRegistro: (i) => ({ mail: i.id }),
+    esegui: async (i, c) => {
+      // Il permesso chiede sempre il pulsante: la bozza parte da rispondiConferma, dopo il sì di Luigi.
+      const r = await creaBozza(c.posta!, i.id, i.testo);
+      return r.messaggio;
     },
   }),
 ];
@@ -291,6 +428,12 @@ export async function eseguiStrumento(nome: string, input: unknown, c: ContestoS
     registra(c.db, s.azione, "errore", "jarvis", { strumento: nome, motivo: "input non valido" });
     return { contenuto: "Dati dello strumento non validi: ricontrolla i campi.", errore: true };
   }
+  const registroInput = s.perRegistro ? s.perRegistro(v.data) : { input: v.data };
+  const problema = s.verifica?.(v.data, c);
+  if (problema) {
+    registra(c.db, s.azione, "errore", "jarvis", { strumento: nome, motivo: problema.slice(0, 120) });
+    return { contenuto: problema, errore: true };
+  }
   const scritture = c.scritture ?? new Map<string, number>();
   const decisione = controllaPermesso(s.azione, {
     vista: c.vista, messaggioLuigi: c.messaggioLuigi, spazio: s.spazio?.(v.data), oggetto: s.oggetto?.(v.data), giaFatte: scritture.get(s.azione) ?? 0,
@@ -301,9 +444,14 @@ export async function eseguiStrumento(nome: string, input: unknown, c: ContestoS
   }
   if (decisione.esito === "conferma") {
     const id = creaConferma(c, s.azione, { strumento: nome, input: v.data });
-    c.emetti({ tipo: "conferma", id, domanda: descriviProposta(nome, v.data), opzioni: [] });
-    registra(c.db, s.azione, "richiesta_conferma", "jarvis", { strumento: nome, input: v.data, motivo: decisione.motivo, conferma: id });
-    return { contenuto: "Non fatto: serve la conferma di Luigi, che vede un pulsante. Diglielo in una frase.", errore: false };
+    c.emetti({ tipo: "conferma", id, domanda: descriviProposta(nome, v.data, c), opzioni: [] });
+    registra(c.db, s.azione, "richiesta_conferma", "jarvis", { strumento: nome, ...registroInput, motivo: decisione.motivo, conferma: id });
+    return {
+      contenuto: nome === "posta_bozza"
+        ? "Non fatto: serve la conferma di Luigi, che vede il testo della bozza e un pulsante. Diglielo in una frase. Anche dopo la conferma la bozza NON viene inviata: la manda lui."
+        : "Non fatto: serve la conferma di Luigi, che vede un pulsante. Diglielo in una frase.",
+      errore: false,
+    };
   }
   c.emetti({ tipo: "strumento", nome });
   try {
@@ -311,7 +459,7 @@ export async function eseguiStrumento(nome: string, input: unknown, c: ContestoS
     const scritto = SCRITTURE.has(s.azione) && !(s.azione === "agenda.cancella" && !contenuto.startsWith("Cancellato"));
     if (scritto) scritture.set(s.azione, (scritture.get(s.azione) ?? 0) + 1);
     if (s.azione !== "agenda.cancella" || !contenuto.startsWith("Ho trovato")) {
-      registra(c.db, s.azione, "fatto", "jarvis", { strumento: nome, input: v.data });
+      registra(c.db, s.azione, "fatto", "jarvis", { strumento: nome, ...registroInput });
     }
     return { contenuto, errore: false };
   } catch (e) {
@@ -321,7 +469,14 @@ export async function eseguiStrumento(nome: string, input: unknown, c: ContestoS
   }
 }
 
-function descriviProposta(nome: string, input: Record<string, unknown>): string {
+function descriviProposta(nome: string, input: Record<string, unknown>, c?: ContestoStrumenti): string {
+  if (nome === "posta_bozza") {
+    const p = c ? contestoPosta(c) : null;
+    const t = p ? mailPerBozza(p, String(input.id)) : {};
+    const dove = t.casella && p ? `casella ${t.casella.nome} · ${nomeSpazio(t.casella.spazio, p.aziende)}` : "";
+    const testo = String(input.testo ?? "").replace(/\s+/g, " ").trim();
+    return `Vuoi che metta questa bozza nelle Bozze${dove ? ` (${dove})` : ""}, in risposta a ${t.m ? `${destinatarioRisposta(t.m)} «${oggettoRisposta(t.m.oggetto)}»` : "questa mail"}? Non verrà inviata: la mandi tu.\n\n«${testo.length > 400 ? `${testo.slice(0, 400)}…` : testo}»`;
+  }
   if (nome === "agenda_aggiungi") return `Vuoi che segni «${input.titolo}» il ${input.data}${input.ora ? ` alle ${input.ora}` : ""}?`;
   if (nome === "agenda_cancella") return `Vuoi che cancelli l'impegno «${input.titolo}»?`;
   if (nome === "ricordo_salva") return `Vuoi che ricordi (${input.spazio}): «${input.testo}»?`;
@@ -329,7 +484,7 @@ function descriviProposta(nome: string, input: Record<string, unknown>): string 
 }
 
 /** Luigi risponde a una conferma (pulsante o «sì» / «il secondo» / «annulla»). */
-export function rispondiConferma(db: Db, id: string, scelta: "conferma" | "annulla" | number, fuso: string, ora = Date.now()): { ok: boolean; messaggio: string } {
+export async function rispondiConferma(db: Db, id: string, scelta: "conferma" | "annulla" | number, fuso: string, ora = Date.now(), posta?: DipendenzePosta): Promise<{ ok: boolean; messaggio: string }> {
   const r = db.prepare("SELECT * FROM conferme WHERE id = ?").get(id) as { id: string; creata: number; azione: string; dati: string; stato: string } | undefined;
   if (!r || r.stato !== "in_attesa") return { ok: false, messaggio: "Questa richiesta non è più in attesa." };
   if (ora - r.creata > 15 * 60_000) {
@@ -360,6 +515,16 @@ export function rispondiConferma(db: Db, id: string, scelta: "conferma" | "annul
   } else if (dati.strumento === "ricordo_salva" && dati.input) {
     aggiungiMemoria(db, dati.input.spazio as Spazio, String(dati.input.testo), "luigi");
     messaggio = "Ricordo salvato.";
+  } else if (dati.strumento === "posta_bozza" && dati.input) {
+    if (!posta) return { ok: false, messaggio: "La posta non è disponibile in questo momento." };
+    // Si segna subito come confermata: un secondo clic non crea una seconda bozza.
+    if (db.prepare("UPDATE conferme SET stato = 'confermata' WHERE id = ? AND stato = 'in_attesa'").run(id).changes === 0) return { ok: false, messaggio: "Questa richiesta non è più in attesa." };
+    try {
+      const r = await creaBozza(posta, String(dati.input.id), String(dati.input.testo));
+      return { ok: true, messaggio: r.messaggio };
+    } catch (e) {
+      return { ok: false, messaggio: (e as Error).message || "Bozza non riuscita." };
+    }
   } else {
     return { ok: false, messaggio: "Non so eseguire questa conferma." };
   }

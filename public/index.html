@@ -74,6 +74,7 @@
 
     <nav id="menu" class="menu" hidden aria-label="Sezioni">
       <a href="#home">Home</a>
+      <a href="#posta">Posta</a>
       <a href="#memoria">Cosa sa di me</a>
       <a href="#registro">Cosa ha fatto</a>
       <a href="#spesa">Spesa del mese</a>
@@ -107,6 +108,31 @@
         </section>
 
         <section id="dialogo" class="dialogo" aria-live="polite" aria-label="Conversazione"></section>
+      </section>
+
+      <!-- POSTA -->
+      <section id="pagina-posta" class="pagina" hidden aria-labelledby="titoloPosta">
+        <h1 id="titoloPosta">Posta</h1>
+        <p class="sotto">Le mail delle tue caselle, divise per azienda e privato. Jarvis le legge e le riassume: non le segna come lette, non le sposta e non le cancella. Le bozze le mandi tu dalla tua app di posta.</p>
+        <div class="schede" role="tablist" aria-label="Quali caselle">
+          <button role="tab" data-vista="privato" aria-selected="false">Privato</button>
+          <button role="tab" data-vista="lavoro" aria-selected="false">Lavoro</button>
+          <button role="tab" data-vista="tutto" aria-selected="true">Tutto</button>
+        </div>
+        <div class="riga-filtri">
+          <label>Periodo
+            <select id="postaGiorni">
+              <option value="2">Oggi e ieri</option>
+              <option value="7" selected>Ultimi 7 giorni</option>
+              <option value="30">Ultimi 30 giorni</option>
+            </select>
+          </label>
+          <label class="spunta"><input id="postaUrgenti" type="checkbox"> Solo urgenti</label>
+          <button id="postaAggiorna" type="button" class="secondario">Aggiorna ora</button>
+        </div>
+        <p id="postaStato" class="esito" role="status" aria-live="polite"></p>
+        <p id="postaAvviso" class="avvisi"></p>
+        <div id="postaGruppi" class="posta-gruppi" aria-live="polite"></div>
       </section>
 
       <!-- MEMORIA -->
@@ -231,10 +257,91 @@
             <label>Link iCal (webcal:// o https://)
               <input id="colIcal" type="password" autocomplete="off" placeholder="lascia vuoto per non cambiarlo">
             </label>
-            <p class="aiuto">Collegato: <span id="colIcalStato">no</span>. Per Apple iCloud la lettura completa con password per app arriva nella Fase 2.</p>
+            <p class="aiuto">Collegato: <span id="colIcalStato">no</span>. Per Apple iCloud c'è anche il collegamento completo qui sotto, in «Calendario Apple».</p>
           </fieldset>
           <p id="esitoCollegamenti" class="esito" role="status"></p>
           <button class="primario" type="submit">Salva i collegamenti</button>
+        </form>
+
+        <!-- CASELLE EMAIL -->
+        <section class="modulo" aria-labelledby="titoloCaselle">
+          <fieldset>
+            <legend id="titoloCaselle">Caselle email</legend>
+            <p class="aiuto">Jarvis legge le caselle in sola lettura ogni 5 minuti: riassume, segnala le urgenze e prepara bozze che mandi tu. Ogni casella appartiene a un'azienda o al privato. Al massimo 10 caselle. Le password restano sul server, cifrate.</p>
+            <ul id="listaCaselle" class="lista-aziende lista-caselle" aria-live="polite"><li class="vuoto">Nessuna casella collegata.</li></ul>
+            <h3 class="sottotitolo" id="titoloNuovaCasella">Aggiungi una casella</h3>
+            <div class="preset" role="group" aria-labelledby="titoloNuovaCasella">
+              <button type="button" class="secondario" data-preset="gmail" aria-pressed="true">Gmail</button>
+              <button type="button" class="secondario" data-preset="pec" aria-pressed="false">PEC Aruba</button>
+              <button type="button" class="secondario" data-preset="altro" aria-pressed="false">Altro</button>
+            </div>
+            <p id="aiutoPreset" class="aiuto"></p>
+            <form id="formCasella" class="sottomodulo" autocomplete="off">
+              <label>Nome della casella (per esempio «Lavoro Edilgreen»)
+                <input id="casNome" maxlength="60" required>
+              </label>
+              <label>Appartiene a
+                <select id="casSpazio" required></select>
+              </label>
+              <label>Indirizzo email
+                <input id="casUtente" type="email" maxlength="200" required autocomplete="off" spellcheck="false">
+              </label>
+              <label><span id="etichettaPassword">Password per le app</span>
+                <input id="casPassword" type="password" maxlength="500" autocomplete="new-password" aria-describedby="aiutoPreset">
+              </label>
+              <div id="casServer" hidden>
+                <label>Server posta in arrivo (IMAP, sempre con TLS)
+                  <input id="casImapHost" maxlength="253" placeholder="imap.esempio.it" spellcheck="false">
+                </label>
+                <label>Porta IMAP
+                  <input id="casImapPorta" type="number" min="1" max="65535" value="993">
+                </label>
+                <label>Server posta in uscita (SMTP, solo per le conferme automatiche)
+                  <input id="casSmtpHost" maxlength="253" placeholder="smtp.esempio.it" spellcheck="false">
+                </label>
+                <label>Porta SMTP
+                  <input id="casSmtpPorta" type="number" min="1" max="65535" value="465">
+                </label>
+              </div>
+              <label id="rigaConfermeCasella" class="spunta"><input id="casConferme" type="checkbox"> Permetti le conferme di ricezione automatiche da questa casella</label>
+              <p id="notaPec" class="aiuto" hidden>PEC: Jarvis legge e prepara bozze, ma non manda mai niente (nemmeno conferme automatiche) e non sposta né segna nessun messaggio.</p>
+              <div class="azioni-modulo">
+                <button id="casSalva" class="primario" type="submit">Prova e aggiungi</button>
+                <button id="casAnnulla" class="secondario" type="button" hidden>Annulla la modifica</button>
+              </div>
+            </form>
+            <p id="esitoCaselle" class="esito" role="status" aria-live="polite"></p>
+          </fieldset>
+          <fieldset>
+            <legend>Conferme di ricezione automatiche</legend>
+            <label class="spunta"><input id="impConferme" type="checkbox" aria-describedby="avvisoConferme"> Attiva le conferme automatiche</label>
+            <p id="avvisoConferme" class="avviso-forte">Se le attivi, Jarvis risponde da solo «Ricevuto, le risponderemo appena possibile» ad alcune mail nuove, solo dalle caselle Gmail o «altro» dove le hai permesse. Mai dalle PEC, mai se la mail parla di soldi, importi, fatture, preventivi, contratti, ordini, scadenze o impegni, mai a newsletter o messaggi automatici. Al massimo una per mittente ogni 7 giorni e 20 al giorno. Nel dubbio non risponde.</p>
+            <p id="esitoConferme" class="esito" role="status"></p>
+          </fieldset>
+        </section>
+
+        <!-- CALENDARIO APPLE -->
+        <form id="formApple" class="modulo" autocomplete="off">
+          <fieldset>
+            <legend>Calendario Apple (iCloud, sola lettura)</legend>
+            <p class="aiuto">Collegato: <span id="appleStato">no</span>.</p>
+            <label>Apple ID (email)
+              <input id="appleId" type="email" maxlength="200" autocomplete="off" spellcheck="false">
+            </label>
+            <label>Password specifica per le app
+              <input id="applePassword" type="password" maxlength="200" autocomplete="new-password" aria-describedby="aiutoApple" placeholder="lascia vuoto per non cambiarla">
+            </label>
+            <p id="aiutoApple" class="aiuto">Non è la password del tuo Apple ID. Creala su <b>account.apple.com</b> → <b>Accesso e sicurezza</b> → <b>Password specifiche per le app</b> → «+», chiamala «Jarvis» e copiala qui.</p>
+            <div class="azioni-modulo">
+              <button class="primario" type="submit">Collega</button>
+              <button id="appleProva" class="secondario" type="button">Prova</button>
+              <button id="appleScollega" class="secondario" type="button">Scollega</button>
+            </div>
+            <h3 class="sottotitolo" id="titoloCalendariApple">Calendari da usare</h3>
+            <ul id="listaCalendariApple" class="lista-calendari" aria-labelledby="titoloCalendariApple"><li class="vuoto">Collega prima l'account Apple.</li></ul>
+            <button id="appleSalvaScelta" class="secondario" type="button" hidden>Salva la scelta dei calendari</button>
+            <p id="esitoApple" class="esito" role="status" aria-live="polite"></p>
+          </fieldset>
         </form>
 
         <section class="riquadro" aria-labelledby="titoloSiri">

@@ -1,4 +1,4 @@
-# Architettura di COSTRUCTO J.A.R.V.I.S. (Fase 1)
+# Architettura di COSTRUCTO J.A.R.V.I.S. (Fasi 1 e 2)
 
 Servizio **separato** da Costructo, con indirizzo e accesso propri. Costructo è uno dei suoi connettori
 (in sola lettura). Un solo utente: Luigi.
@@ -32,6 +32,9 @@ Servizio **separato** da Costructo, con indirizzo e accesso propri. Costructo è
 | `src/costructo.ts`, `src/calendario.ts`, `src/meteo.ts` | connettori |
 | `src/aziende.ts` | più aziende di Costructo: un token per azienda, elenco cifrato, scelta dell'azienda per gli strumenti ([AZIENDE.md](AZIENDE.md)) |
 | `src/briefing.ts`, `src/push.ts` | briefing e notifiche |
+| `src/posta/` | Fase 2: caselle (`caselle.ts`, cifrate), controllo dei server (`rete.ts`), IMAP in sola lettura (`imap.ts`, imapflow), invio solo per le conferme (`uscita.ts`, nodemailer), lettura delle mail (`analisi.ts`, mailparser), archivio 30 giorni (`archivio.ts`), giro ogni 5 minuti (`lettura.ts`, `classifica.ts`, `rispostaAuto.ts`, `servizio.ts`), bozze (`bozze.ts`), strumenti (`strumentiPosta.ts`) — vedi [FASE2.md](FASE2.md) |
+| `src/calendarioApple.ts` | Fase 2: iCloud CalDAV in sola lettura (PROPFIND/REPORT con fetch, parser iCal esistente) |
+| `src/rotteFase2.ts` | API di caselle, Posta, bozze e calendario Apple |
 | `src/sicurezza/` | password (scrypt), TOTP, sessioni, limiti, cifratura, utente |
 | `public/` | PWA (`index.html`, `app.js`, `voce.js`, `api.js`, `sw.js`, manifest, icone) |
 | `public/classic/` | modalità Classic (`classic.js`, scena 3D/2D, suoni, frasi) |
@@ -51,8 +54,8 @@ Servizio **separato** da Costructo, con indirizzo e accesso propri. Costructo è
 
 | Scheda | Ricordi | Strumenti offerti |
 |---|---|---|
-| Privato | solo privati | agenda privata, calendario personale, ricordi privati, numero |
-| Lavoro | solo di lavoro | Costructo (lettura), ricordi di lavoro, numero |
+| Privato | solo privati | agenda privata, calendario personale (link iCal e calendari Apple privati), posta delle caselle private, ricordi privati, numero |
+| Lavoro | solo di lavoro | Costructo (lettura), calendari Apple delle aziende, posta delle caselle delle aziende, ricordi di lavoro, numero |
 | Tutto | entrambi | tutti |
 
 La separazione vale due volte: gli strumenti non vengono nemmeno offerti all'AI, e se l'AI li chiede comunque il motore dei permessi li nega.
@@ -62,6 +65,20 @@ La separazione vale due volte: gli strumenti non vengono nemmeno offerti all'AI,
 `utente` (una riga), `sessioni` (solo hash del token), `tentativi` (limite accessi), `conversazioni` e `messaggi`
 (30 giorni), `memorie` (spazio privato|lavoro, testo, origine, creato, aggiornato), `impegni` (agenda locale),
 `registro`, `consumi` (token e costo per mese), `impostazioni`, `segreti` (cifrati), `conferme`, `iscrizioni_push`.
+Fase 2: `posta_stato` (ultimo UID e UIDVALIDITY per casella, esito dell'ultimo controllo, ultima notifica),
+`posta_messaggi` (30 giorni), `posta_bozze` (30 giorni), `posta_risposte_auto` (impronta del mittente + dominio, per i limiti).
+
+## Il giro della posta (ogni 5 minuti, un solo giro alla volta)
+
+```
+ per ogni casella: EXAMINE INBOX → UID nuovi → FETCH BODY.PEEK (256 KB) → mailparser → posta_messaggi
+ → filtro gratuito (newsletter, automatici, no-reply, ricevute PEC)
+ → cervello (Haiku, una mail per richiesta, max 40 per giro, stessa coda e stesso tetto delle domande) → riassunto, urgente, tocca
+ → conferme automatiche (solo se TUTTE le regole lo permettono)
+ → notifiche urgenti (1 ogni 30 minuti per casella)
+```
+La coda delle chiamate all'AI (`inCoda` in `consumi.ts`) è condivisa tra domande, riassunti e bozze: una chiamata per volta,
+spesa + stima ricontrollate prima di ognuna.
 
 ## Contratto atteso da Costructo (`/api/assistente/v1`)
 
