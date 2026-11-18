@@ -50,7 +50,8 @@ Il service worker **non mette mai in cache le API** (dati personali).
 | leggere calendario e agenda privata | sì, tranne nella scheda Lavoro |
 | aggiungere / cancellare impegni locali, salvare ricordi | sì se Luigi lo chiede nel turno e sullo stesso oggetto (una sola cancellazione per turno); altrimenti conferma |
 | ricordi di uno spazio diverso dalla scheda | negato |
-| qualunque altra azione (email, WhatsApp, scrittura in Costructo…) | negato |
+| risposta WhatsApp, azienda di un contatto WhatsApp (Fase 3) | sempre conferma di Luigi |
+| qualunque altra azione (invio di email, scrittura in Costructo…) | negato |
 
 Ogni azione, accesso, modifica e rifiuto finisce nel **registro** («Cosa ha fatto»). Il registro **non conserva testi personali**: di titoli, ricordi e ricerche restano un'impronta e un estratto di 24 caratteri; dopo 30 giorni estratti e indirizzi IP vengono tolti, e quando Luigi cancella un ricordo o un impegno sparisce anche il suo estratto (`registro.test.ts`).
 
@@ -112,8 +113,50 @@ nessuno strumento per inviare (`posta.test.ts`, test «iniezione»).
 Si salvano intestazioni, 4 KB di testo senza HTML, nomi e dimensioni degli allegati, riassunto e urgenza: **cancellati dopo 30 giorni**
 (pulizia ogni 6 ore). Il registro non contiene testi delle mail né delle bozze.
 
+## Fase 3: WhatsApp (parte 1, senza collegamento reale)
+
+### Webhook pubblico (`/api/whatsapp/webhook`)
+È l'unica rotta sotto `/api` raggiungibile senza accesso, perché la chiama Meta. Non è fuori dalla sicurezza (`whatsapp.test.ts`):
+- **spento** (404 su GET e POST) finché in Impostazioni non ci sono il segreto dell'app e la parola di verifica;
+- **Host** controllato come nel resto dell'app (421); intestazioni di sicurezza e `Cache-Control: no-store` come le altre API;
+- **GET**: `hub.verify_token` confrontato a tempo costante (impronte SHA-256 + `timingSafeEqual`); sbagliato → 403;
+- **POST**: firma `X-Hub-Signature-256` = HMAC-SHA256 del corpo **grezzo** con il segreto dell'app, confronto a tempo costante;
+  senza firma o sbagliata → 401 e niente salvato. Il controllo Origin non vale qui (Meta non lo manda): la firma lo sostituisce;
+- corpo al massimo **2 MB** (413); JSON controllato con zod in modo tollerante (campi sconosciuti ignorati, elementi non validi scartati);
+  i cambiamenti di un altro `phone_number_id` si ignorano;
+- al massimo 600 richieste al minuto per IP; dopo 20 firme o verifiche sbagliate in 15 minuti quell'IP è bloccato 15 minuti (429);
+- risponde **200 subito** e lavora dopo, in coda; lo stesso messaggio (stesso id di WhatsApp) non si salva mai due volte.
+
+### Segreti
+Segreto cifrato `whatsapp` (AES-256-GCM): token di Meta o chiave del fornitore, segreto dell'app, parola di verifica.
+**Mai** restituiti al browser, nemmeno in parte (solo «impostato sì/no»), mai nel registro (solo i nomi dei campi cambiati).
+Cambiare fornitore o indirizzo richiede di riscrivere il token. Indirizzo del fornitore: solo https, porta 443, nome pubblico,
+niente credenziali nel link; gli invii usano `redirect: "error"` e un tempo massimo di 15 secondi.
+
+### Invio
+Nessuno strumento manda niente da solo: `whatsapp_risposta` e `whatsapp_assegna_azienda` chiedono **sempre** la conferma
+(`SEMPRE_CONFERMA`); dalla pagina l'invio richiede `{conferma: true}`, mandato solo dal pulsante «Sì, manda». Una conferma vale
+una volta (doppio clic: un solo messaggio). Fuori dalle 24 ore o nei gruppi non si prepara niente. Jarvis non manda mai lo stato
+«letto» (non esiste il codice per farlo). Conferme automatiche: spente di serie, regole in [FASE3.md](FASE3.md).
+
+### Testo confermato (dopo la revisione)
+La domanda di conferma mostra il testo intero e ripulito (`src/sicurezza/testoConfermato.ts`: niente caratteri bidi, a larghezza zero
+o di controllo, niente file di spazi); parte o va nelle Bozze la stessa stringa, legata all'impronta SHA-256 di destinatario + testo.
+Dalla chat: WhatsApp al massimo 1000 caratteri, bozza email 2000; «[da completare]» rifiutato dal server per WhatsApp. Invii ripetuti
+solo se sicuramente non partiti (429, collegamento mai aperto); altrimenti «esito incerto». Indirizzo del fornitore controllato anche
+con il DNS (nessun indirizzo interno) al salvataggio e a ogni invio.
+
+### Dati personali
+- Numeri di telefono: nel registro solo le ultime 3 cifre (`•••567`), nelle notifiche **mai** (solo il nome del contatto, o
+  nemmeno quello con «nascondi contenuto»); nella pagina WhatsApp mascherati; all'AI non vanno.
+- Testo dei messaggi: al massimo 4 KB; allegati **mai scaricati** (solo tipo, formato, nome del file, didascalia, id). Dei
+  contatti condivisi si tiene solo il nome. Tutto si cancella dopo 30 giorni (pulizia ogni 6 ore); resta solo la scelta di Luigi
+  sull'azienda di un contatto.
+- Il testo dei messaggi va all'AI solo tra i delimitatori dei dati, una chat per richiesta, senza strumenti (test «iniezione»).
+
 ## Cosa resta aperto (da valutare)
 - Il limite tentativi si basa sull'IP: su Railway serve `JARVIS_PROXY=1` (vedi «Accesso»).
 - Il riconoscimento vocale del browser (Chrome) manda l'audio ai server di Google; Safari usa i servizi Apple. Va detto a Luigi.
 - Le conversazioni vengono inviate a Anthropic per avere la risposta (nessun addestramento per le API, secondo i termini commerciali; da confermare nella revisione).
+- Fase 3: anche i messaggi WhatsApp (testo breve) vanno a Anthropic per il riassunto. Il webhook è pubblico: la sua sicurezza dipende dal segreto dell'app di Meta, da tenere riservato.
 - Fase 2: anche il testo breve delle mail va a Anthropic per il riassunto. La notifica di mail urgente mostra mittente e oggetto sulla schermata bloccata.

@@ -8,7 +8,7 @@ import { creaCifratore, chiaveDaFrase } from "../src/sicurezza/cifra.js";
 import { creaUtente } from "../src/sicurezza/utente.js";
 import { codiceTotp, passoAttuale } from "../src/sicurezza/totp.js";
 import { leggiConfig } from "../src/config.js";
-import { creaApp, type OpzioniApp } from "../src/app.js";
+import { creaApp, type OpzioniApp, type ServiziApp } from "../src/app.js";
 
 export const PASSWORD = "password-di-prova-123";
 export const SEGRETO = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
@@ -26,6 +26,8 @@ export interface Ambiente {
   chiama: (percorso: string, init?: RequestInit & { json?: unknown }) => Promise<Response>;
   accedi: () => Promise<void>;
   cookie: string;
+  /** Servizi dell'app (posta, calendario Apple, WhatsApp). */
+  servizi: ServiziApp;
 }
 
 export async function avviaAmbiente(extra: Partial<OpzioniApp> = {}): Promise<Ambiente> {
@@ -40,7 +42,7 @@ export async function avviaAmbiente(extra: Partial<OpzioniApp> = {}): Promise<Am
   const origine = `http://127.0.0.1:${porta}`;
   config.origineAmmessa.splice(0, config.origineAmmessa.length, origine);
   const amb: Ambiente = {
-    db, base: origine, origine, cookie: "",
+    db, base: origine, origine, cookie: "", servizi: app.locals.servizi as ServiziApp,
     chiama: (percorso, init = {}) => {
       const headers = new Headers(init.headers);
       if (!headers.has("Origin") && init.method && init.method !== "GET") headers.set("Origin", origine);

@@ -4,6 +4,7 @@ import { apriDb } from "./db.js";
 import { creaCifratore } from "./sicurezza/cifra.js";
 import { creaApp, type ServiziApp } from "./app.js";
 import { pulisciPostaVecchia } from "./posta/archivio.js";
+import { pulisciWhatsappVecchio } from "./whatsapp/archivio.js";
 import { leggiApple, eventiApple } from "./calendarioApple.js";
 import { pulisciConversazioniVecchie } from "./conversazioni.js";
 import { creaInvio, controllaOraBriefing } from "./push.js";
@@ -38,6 +39,9 @@ function pulizia() {
   // Fase 2: i dati delle mail (testo breve, riassunti, bozze) si cancellano dopo 30 giorni.
   const mail = pulisciPostaVecchia(db);
   if (mail) registra(db, "posta.pulizia", "fatto", "sistema", { mailCancellate: mail });
+  // Fase 3: i messaggi WhatsApp (testo breve, riassunti, risposte, domande) si cancellano dopo 30 giorni.
+  const wa = pulisciWhatsappVecchio(db);
+  if (wa) registra(db, "whatsapp.pulizia", "fatto", "sistema", { messaggiCancellati: wa });
 }
 pulizia();
 setInterval(pulizia, 6 * 3600_000).unref();
@@ -55,6 +59,8 @@ setInterval(() => {
 
 // Fase 2: giro della posta ogni 5 minuti (lettura in sola lettura, riassunti, conferme ammesse, notifiche urgenti).
 (app.locals.servizi as ServiziApp).posta.avvia();
+// Fase 3: giro di WhatsApp ogni minuto (classificazione dopo 2 minuti di silenzio del contatto, domande, conferme, notifiche).
+(app.locals.servizi as ServiziApp).whatsapp.avvia();
 
 app.listen(config.porta, config.host, () => {
   console.log(`Jarvis è attivo su http://${config.host}:${config.porta}`);

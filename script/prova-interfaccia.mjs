@@ -71,7 +71,7 @@ try {
       controlla(`${nome}: nessuno scorrimento orizzontale`, sbordo <= 0, `${sbordo}px`);
       await pagina.screenshot({ path: `${cartella}/home-${nome}.png`, fullPage: larghezza === 390 });
 
-      for (const p of ["posta", "memoria", "registro", "spesa", "impostazioni"]) {
+      for (const p of ["posta", "whatsapp", "memoria", "registro", "spesa", "impostazioni"]) {
         await pagina.evaluate((h) => { location.hash = h; }, p);
         await pagina.waitForTimeout(400);
         const sb = await pagina.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -99,6 +99,38 @@ try {
         const sbPosta = await pagina.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
         controlla("posta aperta senza scorrimento orizzontale", sbPosta <= 0, `${sbPosta}px`);
         await pagina.screenshot({ path: `${cartella}/posta-bozza-${nome}.png`, fullPage: true });
+        // WhatsApp (Fase 3): gruppi per azienda, privato e «Da assegnare», urgente evidenziata, domanda con i pulsanti,
+        // avviso «parte 2», risposta solo dopo la conferma (qui WhatsApp non è collegato: resta bozza).
+        await pagina.evaluate(() => { location.hash = "whatsapp"; });
+        await pagina.waitForSelector(".wa-chat");
+        controlla("WhatsApp: avviso «collegamento nella parte 2»", await pagina.locator("#waNonCollegato").isVisible());
+        const gruppiWa = await pagina.locator("#waGruppi .gruppo-wa h2").allTextContents();
+        controlla("WhatsApp: chat divise per azienda, privato e da assegnare", gruppiWa.length === 4 && gruppiWa.some((g) => g.startsWith("Privato")) && gruppiWa.some((g) => g.startsWith("Da assegnare")), gruppiWa.join(" | "));
+        controlla("WhatsApp: chat urgente evidenziata", (await pagina.locator(".wa-chat.urgente").count()) === 1);
+        controlla("WhatsApp: domanda «Di quale azienda è…?» con i pulsanti", (await pagina.locator(".wa-domanda button").count()) === 3 && /Di quale azienda è Numero nuovo/.test(await pagina.locator(".wa-domanda p").first().textContent()));
+        controlla("WhatsApp: proposta di chiedere la fattura", (await pagina.locator(".wa-chat .etichetta", { hasText: "Risposta proposta" }).count()) === 1);
+        await pagina.screenshot({ path: `${cartella}/whatsapp-elenco-${nome}.png`, fullPage: true });
+        await pagina.locator(".wa-chat.urgente button", { hasText: "Apri" }).click();
+        await pagina.waitForSelector(".wa-messaggi .wa-msg");
+        await pagina.locator(".wa-chat.urgente button", { hasText: "Prepara risposta" }).click();
+        await pagina.waitForSelector(".wa-chat.urgente .zona-bozza .testo-bozza");
+        controlla("WhatsApp: risposta proposta e modificabile", ((await pagina.inputValue(".wa-chat.urgente .zona-bozza .testo-bozza")) || "").includes("[da completare]"));
+        await pagina.locator(".wa-chat.urgente .zona-bozza button", { hasText: "Invia" }).click();
+        controlla("WhatsApp: con [da completare] non si manda", /da completare/.test(await pagina.locator(".wa-chat.urgente .zona-bozza .esito").textContent()) && (await pagina.locator(".wa-conferma").count()) === 0);
+        await pagina.fill(".wa-chat.urgente .zona-bozza .testo-bozza", "Arrivo tra mezz'ora\u200b con il tecnico\u202e (prova).");
+        await pagina.locator(".wa-chat.urgente .zona-bozza button", { hasText: "Invia" }).click();
+        await pagina.waitForSelector(".wa-conferma");
+        controlla("WhatsApp: prima di mandare chiede la conferma", /Mando questo messaggio su WhatsApp a Capocantiere Prova/.test(await pagina.locator(".wa-conferma p").first().textContent()));
+        controlla("WhatsApp: l'anteprima mostra il testo pulito dal server (quello che partirà)", (await pagina.textContent(".wa-anteprima")) === "Arrivo tra mezz'ora con il tecnico (prova).");
+        await pagina.screenshot({ path: `${cartella}/whatsapp-conferma-${nome}.png`, fullPage: true });
+        await pagina.locator(".wa-conferma button", { hasText: "Sì, manda" }).click();
+        await pagina.waitForFunction(() => /parte 2/.test(document.querySelector(".wa-chat.urgente .zona-bozza .esito")?.textContent || ""));
+        controlla("WhatsApp: non collegato → non parte, resta bozza", true);
+        const sbWa = await pagina.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        controlla("WhatsApp aperta senza scorrimento orizzontale", sbWa <= 0, `${sbWa}px`);
+        await pagina.locator(".wa-domanda button", { hasText: "Privato" }).click();
+        await pagina.waitForFunction(() => !document.querySelector(".wa-domanda"));
+        controlla("WhatsApp: risposta alla domanda ricordata", (await pagina.locator("#waGruppi .gruppo-wa h2", { hasText: "Da assegnare" }).count()) === 0);
         // Impostazioni: caselle, preset e calendario Apple
         await pagina.evaluate(() => { location.hash = "impostazioni"; });
         await pagina.waitForSelector("#listaCaselle li:not(.vuoto)");
@@ -108,6 +140,11 @@ try {
         await pagina.click("[data-preset=altro]");
         controlla("preset Altro: campi dei server", await pagina.locator("#casImapHost").isVisible());
         controlla("conferme automatiche spente di serie", !(await pagina.isChecked("#impConferme")));
+        controlla("WhatsApp: impostazioni «Non collegato», conferme automatiche spente", /Non collegato/.test(await pagina.textContent("#waStatoColl")) && !(await pagina.isChecked("#waConferme")) && (await pagina.inputValue("#waToken")) === "");
+        controlla("WhatsApp: indirizzo del webhook mostrato", /\/api\/whatsapp\/webhook$/.test(await pagina.textContent("#waUrl")));
+        await pagina.selectOption("#waProvider", "bsp");
+        controlla("WhatsApp: campi del fornitore", await pagina.locator("#waBase").isVisible() && !(await pagina.locator("#waVersione").isVisible()));
+        await pagina.locator("#formWhatsapp").screenshot({ path: `${cartella}/impostazioni-whatsapp-${nome}.png` });
         await pagina.locator("#formCasella").screenshot({ path: `${cartella}/caselle-altro-${nome}.png` });
         await pagina.evaluate(() => { location.hash = "home"; });
         await pagina.click("#apriMenu");
