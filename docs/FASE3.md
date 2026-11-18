@@ -93,7 +93,8 @@ Ogni passo che costa o tocca account veri va **approvato da Luigi prima**.
 | `GET/PUT/DELETE /api/whatsapp/collegamento` | collegamento (segreti **mai** restituiti: solo «impostato»), indirizzo del webhook, interruttori |
 | `GET /api/whatsapp/chat?vista=&giorni=&soloUrgenti=1` · `GET /api/whatsapp/chat/:id` | elenco per azienda/privato/da assegnare, domande aperte · ultimi 40 messaggi e risposte aperte |
 | `POST /api/whatsapp/chat/:id/proponi` · `POST /api/whatsapp/chat/:id/risposte` | testo proposto dall'AI · salva una bozza (non la manda) |
-| `POST /api/whatsapp/risposte/:id/invia` `{conferma: true}` · `DELETE /api/whatsapp/risposte/:id` | invio dopo la conferma · scarta |
+| `PATCH /api/whatsapp/risposte/:id {testo}` | corregge il testo: torna pulito con la nuova impronta |
+| `POST /api/whatsapp/risposte/:id/invia` `{conferma: true, impronta}` · `DELETE /api/whatsapp/risposte/:id` | invio del testo con quell'impronta dopo la conferma · scarta |
 | `POST /api/whatsapp/domande/:id {spazio}` · `PUT /api/whatsapp/chat/:id/azienda {spazio}` | risposta a «Di quale azienda è…?» · cambio dell'azienda |
 | `POST /api/whatsapp/aggiorna` | giro adesso (azienda, riassunti, proposte, conferme, notifiche) |
 | `PUT /api/impostazioni {whatsappConfermeAutomatiche, whatsappNascondiContenuto}` | interruttori |
@@ -107,10 +108,10 @@ permessi, strumenti, assistente, prompt, briefing; interfaccia in `public/`. Tes
 
 | Prova | Esito |
 |---|---|
-| `npm test` | **139/139** (111 di prima + 28 nuovi) |
+| `npm test` | **150/150** (111 di prima + 39 nuovi, di cui 11 dopo la revisione) |
 | `npx tsc --noEmit` | nessun errore |
 | `npm run build` e avvio di `node dist/server.js` | funzionano |
-| `node script/prova-interfaccia.mjs` (390/1280 px, chiaro/scuro) | **66/66** (48 di prima + 18 nuovi su WhatsApp) |
+| `node script/prova-interfaccia.mjs` (390/1280 px, chiaro/scuro) | **67/67** (48 di prima + 19 nuovi su WhatsApp) |
 
 Formato dei webhook preso dalla documentazione ufficiale di Meta, letta il 18/11/2026 (messages, smb_message_echoes, history,
 smb_app_state_sync, group messages, «Onboard WhatsApp Business app users», create webhook endpoint, text messages).
@@ -127,12 +128,36 @@ smb_app_state_sync, group messages, «Onboard WhatsApp Business app users», cre
 - Lo strumento si chiama `whatsapp_risposta`: nel test della Fase 2 «niente strumenti di invio» il controllo su «sposta» ora
   guarda solo l'inizio della parola (prima «risposta» sarebbe sembrato «sposta»).
 
+## Correzioni dopo la revisione indipendente
+
+1. **Conferma = testo che parte.** La domanda di conferma (in chat e nella pagina) mostra il testo **intero**, già ripulito dai
+   caratteri invisibili o di inversione del verso (bidi, larghezza zero, controllo) e dalle file di spazi o righe vuote; parte
+   (o va nelle Bozze) esattamente quella stringa. Dalla chat: messaggio WhatsApp al massimo **1000** caratteri, bozza email al
+   massimo **2000** (più lunghi: rifiutati, mai tagliati). La conferma è legata all'**impronta** (SHA-256) di destinatario + testo:
+   se il testo cambia, non vale. «[da completare]» viene rifiutato anche dal server. Gli strumenti che mandano non eseguono mai
+   da soli (difesa in più): solo la conferma fa partire il messaggio.
+2. **Invio senza doppioni**: si ripete solo su 429 o se il collegamento non si è mai aperto (ECONNREFUSED, ENOTFOUND, EAI_AGAIN).
+   Tempo scaduto, connessione caduta o errore 5xx: **esito incerto**, nessun nuovo tentativo, Jarvis dice di controllare sul telefono.
+3. **Indirizzo del fornitore**: punto finale tolto, solo https, niente indirizzi numerici o nomi interni (stesse regole della posta),
+   niente nip.io/sslip.io o metadati; il nome si risolve e basta un indirizzo interno per bloccare; il controllo si ripete a ogni invio;
+   nessun reindirizzamento. Il token va solo all'indirizzo configurato.
+4. **Conferme automatiche**: bloccate se un qualunque messaggio del contatto delle ultime 24 ore non è ancora classificato o parla di soldi.
+5. **30 giorni** contati anche sulla data del messaggio; lo storico più vecchio di 30 giorni non si salva.
+6. **Contatti doppi** (prima con l'id utente, poi con il numero) uniti; se le scelte di Luigi erano diverse vale quella del numero
+   e si apre una domanda.
+7. **Direzione dello storico** dal mittente (anche nelle chat senza numero).
+8. **Pagina**: il server salva il testo pulito e lo restituisce con l'impronta; l'anteprima mostra quello e «Sì, manda» manda quell'impronta.
+9. **Costructo**: un errore non resta in memoria; le domande aperte si ricontrollano e si chiudono da sole se il numero compare in una sola azienda.
+10. Finestra di 24 ore solo con veri messaggi del contatto (non reazioni, cancellati, non supportati); un invio non consegnato non vale come
+    risposta; «assegna azienda» rispetta la scheda aperta. Campo `recipient` per gli utenti senza numero: **verificato** nella documentazione
+    Meta «Text messages» («replace the `to` property with `recipient`»); resta da provare dal vivo.
+
 ## Da sapere / aperto per la parte 2
 
 - **Mai provato con Meta vero**: formati presi dalla documentazione, non da messaggi reali.
 - Costructo dà al massimo **200 controparti** per azienda: con più clienti e fornitori qualche numero non si trova (servirà una ricerca per telefono in Costructo).
 - **Utenti senza numero** (nome utente WhatsApp): Jarvis li riconosce con l'id utente (`user_id`) e risponde con `recipient`; da verificare dal vivo.
-- **Riprova dell'invio**: dopo un errore di rete Jarvis riprova (al massimo 3 tentativi); se il primo era arrivato a Meta, il contatto potrebbe ricevere il messaggio due volte. Raro, da valutare.
+- **Esito incerto**: dopo un tempo scaduto o un errore 5xx Jarvis non riprova; Luigi controlla sul telefono (la risposta resta «incerta»).
 - I messaggi e i riassunti vanno a Anthropic per la classificazione (come la posta): va detto a Luigi.
 - Modelli approvati da Meta (per scrivere dopo 24 ore), costi e intestazione dell'account: decisioni di Luigi.
 - Un'eventuale seconda azienda con un secondo numero: il webhook accetta un solo `phone_number_id`.

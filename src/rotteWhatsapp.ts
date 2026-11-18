@@ -11,7 +11,7 @@ import { ErroreWhatsapp, MAX_TESTO_RISPOSTA, PRIVATO, type ContattoWa, type Mess
 import { collegamentoVisibile, salvaCollegamento, scollega, SchemaModificaCollegamento } from "./whatsapp/collegamento.js";
 import { elencaChat, leggiContatto, leggiRisposta, mediaDi, nomeContatto, nomeSpazio, risposteAperte, statoChat, ultimiMessaggi } from "./whatsapp/archivio.js";
 import { domandeAperte, rispondiDomanda } from "./whatsapp/attribuzione.js";
-import { inviaRisposta, preparaRisposta, proponiTesto, scartaRisposta } from "./whatsapp/risposte.js";
+import { correggiRisposta, improntaRisposta, inviaRisposta, preparaRisposta, proponiTesto, scartaRisposta } from "./whatsapp/risposte.js";
 import { spaziWhatsapp } from "./whatsapp/strumentiWhatsapp.js";
 import { mascheraTelefono } from "./whatsapp/telefono.js";
 
@@ -41,7 +41,8 @@ export function montaRotteWhatsapp(app: Express, o: OpzioniRotteWa): void {
       statoInvio: m.stato_invio, erroreInvio: m.errore_invio, riassunto: m.riassunto, urgente: !!m.urgente, motivo: m.motivo, tocca: !!m.tocca, stato: m.stato,
     };
   };
-  const vistaRisposta = (r: RispostaWa) => ({ id: r.id, tipo: r.tipo, testo: r.testo, creata: r.creata, stato: r.stato, esito: r.esito });
+  // «impronta»: contatto + testo esatto. Il browser la rimanda con la conferma: parte solo il testo mostrato.
+  const vistaRisposta = (r: RispostaWa) => ({ id: r.id, tipo: r.tipo, testo: r.testo, creata: r.creata, stato: r.stato, esito: r.esito, impronta: improntaRisposta(r) });
 
   // ------------------------------------------------------------ Impostazioni → WhatsApp
   const statoImpostazioni = () => ({
@@ -50,11 +51,11 @@ export function montaRotteWhatsapp(app: Express, o: OpzioniRotteWa): void {
     nascondiContenuto: leggiImpostazioni(db).whatsappNascondiContenuto,
   });
   app.get("/api/whatsapp/collegamento", (_req, res) => { res.json(statoImpostazioni()); });
-  app.put("/api/whatsapp/collegamento", (req, res) => {
+  app.put("/api/whatsapp/collegamento", async (req, res) => {
     const d = SchemaModificaCollegamento.safeParse(req.body);
     if (!d.success) return res.status(400).json({ errore: "Dati non validi." });
     try {
-      salvaCollegamento(fonte, d.data);
+      await salvaCollegamento({ ...fonte, risolvi: dip.risolvi }, d.data);
       // Nel registro solo i nomi dei campi cambiati, mai i valori.
       registra(db, "collegamenti.modifica", "fatto", "luigi", { campi: ["whatsapp", ...Object.keys(d.data).filter((k) => (d.data as Record<string, unknown>)[k] !== "")] });
       res.json(statoImpostazioni());
@@ -111,15 +112,19 @@ export function montaRotteWhatsapp(app: Express, o: OpzioniRotteWa): void {
     if (!d.success) return res.status(400).json({ errore: "Scrivi il testo della risposta." });
     try { res.json(vistaRisposta(preparaRisposta(dip, String(req.params.id), d.data.testo, "risposta", "bozza", "luigi"))); } catch (e) { errore(res, e); }
   });
-  // L'invio vero: solo con {conferma: true}, mandato dal pulsante «Invia» DOPO la domanda di conferma nella pagina.
+  // Luigi corregge il testo: il server lo salva pulito e restituisce testo e impronta da mostrare nella conferma.
+  app.patch("/api/whatsapp/risposte/:id", (req, res) => {
+    const d = z.object({ testo: z.string().min(1).max(MAX_TESTO_RISPOSTA) }).strict().safeParse(req.body);
+    if (!d.success) return res.status(400).json({ errore: "Scrivi il testo della risposta." });
+    try { res.json(vistaRisposta(correggiRisposta(dip, String(req.params.id), d.data.testo))); } catch (e) { errore(res, e); }
+  });
+  // L'invio vero: solo con {conferma: true} e l'impronta del testo mostrato nella conferma (pulsante «Sì, manda»).
   app.post("/api/whatsapp/risposte/:id/invia", async (req, res) => {
-    const d = z.object({ conferma: z.literal(true), testo: z.string().min(1).max(MAX_TESTO_RISPOSTA).optional() }).strict().safeParse(req.body);
+    const d = z.object({ conferma: z.literal(true), impronta: z.string().regex(/^[0-9a-f]{64}$/) }).strict().safeParse(req.body);
     if (!d.success) return res.status(400).json({ errore: "Serve la tua conferma per mandare il messaggio." });
     const r = leggiRisposta(db, String(req.params.id));
     if (!r) return res.status(404).json({ errore: "Risposta non trovata." });
-    // Luigi può correggere il testo proposto prima di confermare.
-    if (d.data.testo && d.data.testo.trim() !== r.testo) db.prepare("UPDATE wa_risposte SET testo = ? WHERE id = ? AND stato IN ('proposta','bozza','errore')").run(d.data.testo.trim(), r.id);
-    try { res.json(await inviaRisposta(dip, r.id)); } catch (e) { errore(res, e); }
+    try { res.json(await inviaRisposta(dip, r.id, d.data.impronta)); } catch (e) { errore(res, e); }
   });
   app.delete("/api/whatsapp/risposte/:id", (req, res) => {
     res.status(scartaRisposta(dip, String(req.params.id)) ? 200 : 404).json({ ok: true });

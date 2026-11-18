@@ -6,6 +6,7 @@ import type { Cifratore } from "../sicurezza/cifra.js";
 import type { Cervello } from "../cervello/tipi.js";
 import type { Invia } from "../push.js";
 import type { AziendaCollegata } from "../aziende.js";
+import type { RisolviNome } from "../calendario.js";
 
 /** Un'azienda come la vede WhatsApp: solo id e nome. */
 export interface AziendaWa { id: string; nome: string }
@@ -23,6 +24,11 @@ export const RAGGRUPPA_MS = 2 * 60_000;
 export const PAUSA_NOTIFICHE_MS = 30 * 60_000;
 /** Testo massimo di una risposta (limite di WhatsApp: 4096 caratteri). */
 export const MAX_TESTO_RISPOSTA = 4000;
+/**
+ * Testo massimo di una risposta proposta dall'AI con una richiesta di conferma: deve stare TUTTO nella domanda
+ * di conferma (niente parti nascoste dopo un taglio). Più lungo → rifiutato.
+ */
+export const MAX_TESTO_CONFERMA = 1000;
 
 export type Provider = "meta" | "bsp";
 
@@ -62,6 +68,8 @@ export interface DipendenzeWhatsapp {
   ora?: () => number;
   /** Attesa tra un tentativo d'invio e l'altro (nei test: 0). */
   attesaRiprova?: (ms: number) => Promise<void>;
+  /** Risoluzione dei nomi (indirizzo del fornitore: niente rete interna). Nei test: finta. */
+  risolvi?: RisolviNome;
 }
 
 export interface ContattoWa {
@@ -114,7 +122,7 @@ export interface RispostaWa {
   tipo: "risposta" | "richiesta_documento";
   testo: string;
   creata: number;
-  stato: "proposta" | "bozza" | "in_invio" | "inviata" | "errore" | "scartata";
+  stato: "proposta" | "bozza" | "in_invio" | "inviata" | "errore" | "incerto" | "scartata";
   wamid: string;
   esito: string;
   inviata: number;
@@ -122,4 +130,9 @@ export interface RispostaWa {
 
 export class ErroreWhatsapp extends Error {
   constructor(messaggio: string, readonly stato = 400) { super(messaggio); }
+}
+
+/** Invio con esito incerto (tempo scaduto, errore 5xx): il messaggio potrebbe essere partito. Mai ripetere da soli. */
+export class InvioIncerto extends ErroreWhatsapp {
+  constructor() { super("Esito incerto: WhatsApp non ha risposto in tempo e il messaggio potrebbe essere partito. Controlla sul telefono prima di riprovare.", 502); }
 }

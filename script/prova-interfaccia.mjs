@@ -117,10 +117,11 @@ try {
         controlla("WhatsApp: risposta proposta e modificabile", ((await pagina.inputValue(".wa-chat.urgente .zona-bozza .testo-bozza")) || "").includes("[da completare]"));
         await pagina.locator(".wa-chat.urgente .zona-bozza button", { hasText: "Invia" }).click();
         controlla("WhatsApp: con [da completare] non si manda", /da completare/.test(await pagina.locator(".wa-chat.urgente .zona-bozza .esito").textContent()) && (await pagina.locator(".wa-conferma").count()) === 0);
-        await pagina.fill(".wa-chat.urgente .zona-bozza .testo-bozza", "Arrivo tra mezz'ora con il tecnico (prova).");
+        await pagina.fill(".wa-chat.urgente .zona-bozza .testo-bozza", "Arrivo tra mezz'ora\u200b con il tecnico\u202e (prova).");
         await pagina.locator(".wa-chat.urgente .zona-bozza button", { hasText: "Invia" }).click();
         await pagina.waitForSelector(".wa-conferma");
         controlla("WhatsApp: prima di mandare chiede la conferma", /Mando questo messaggio su WhatsApp a Capocantiere Prova/.test(await pagina.locator(".wa-conferma p").first().textContent()));
+        controlla("WhatsApp: l'anteprima mostra il testo pulito dal server (quello che partirà)", (await pagina.textContent(".wa-anteprima")) === "Arrivo tra mezz'ora con il tecnico (prova).");
         await pagina.screenshot({ path: `${cartella}/whatsapp-conferma-${nome}.png`, fullPage: true });
         await pagina.locator(".wa-conferma button", { hasText: "Sì, manda" }).click();
         await pagina.waitForFunction(() => /parte 2/.test(document.querySelector(".wa-chat.urgente .zona-bozza .esito")?.textContent || ""));

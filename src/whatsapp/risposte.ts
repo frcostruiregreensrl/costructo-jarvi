@@ -13,7 +13,8 @@ import { leggiCollegamento, invioPronto } from "./collegamento.js";
 import { mandaTesto } from "./invio.js";
 import { leggiContatto, leggiRisposta, nomeContatto, nuovoId, salvaMessaggio, statoChat, ultimiMessaggi } from "./archivio.js";
 import { mascheraTelefono } from "./telefono.js";
-import { ErroreWhatsapp, MAX_TESTO_RISPOSTA, type ContattoWa, type DipendenzeWhatsapp, type RispostaWa } from "./tipi.js";
+import { pulisciTestoConfermato, improntaConferma, stessaImpronta, DA_COMPLETARE } from "../sicurezza/testoConfermato.js";
+import { ErroreWhatsapp, InvioIncerto, MAX_TESTO_RISPOSTA, type ContattoWa, type DipendenzeWhatsapp, type RispostaWa } from "./tipi.js";
 
 export const fuoriFinestra = (nome: string) =>
   `Sono passate più di 24 ore dall'ultimo messaggio di ${nome}: WhatsApp permette di scrivere solo con un «modello» approvato da Meta, ` +
@@ -29,15 +30,35 @@ export function controllaRispondibile(dip: Pick<DipendenzeWhatsapp, "db" | "ora"
   return c;
 }
 
+/** Impronta della risposta: contatto + testo esatto. La conferma di Luigi vale solo per questa impronta. */
+export const improntaRisposta = (r: Pick<RispostaWa, "contatto_id" | "testo">) => improntaConferma(r.contatto_id, r.testo);
+
+/** Testo pulito (niente caratteri invisibili), non vuoto, non troppo lungo. È questo che si mostra e che parte. */
+export function testoRisposta(testo: string, massimo = MAX_TESTO_RISPOSTA): string {
+  const corpo = pulisciTestoConfermato(testo);
+  if (!corpo) throw new ErroreWhatsapp("Scrivi il testo della risposta.");
+  if (corpo.length > massimo) throw new ErroreWhatsapp(`Il testo è troppo lungo (al massimo ${massimo} caratteri).`);
+  return corpo;
+}
+
 /** Salva una risposta (bozza o proposta). NON la manda. */
 export function preparaRisposta(dip: Pick<DipendenzeWhatsapp, "db" | "ora">, contattoId: string, testo: string, tipo: RispostaWa["tipo"] = "risposta", stato: "bozza" | "proposta" = "bozza", origine: "luigi" | "jarvis" = "jarvis"): RispostaWa {
   const c = controllaRispondibile(dip, contattoId);
-  const corpo = testo.replace(/\r\n/g, "\n").trim();
-  if (!corpo) throw new ErroreWhatsapp("Scrivi il testo della risposta.");
-  if (corpo.length > MAX_TESTO_RISPOSTA) throw new ErroreWhatsapp("Il testo è troppo lungo (al massimo 4000 caratteri).");
+  const corpo = testoRisposta(testo);
   const id = nuovoId("r");
   dip.db.prepare("INSERT INTO wa_risposte (id, contatto_id, tipo, testo, creata, stato) VALUES (?,?,?,?,?,?)").run(id, c.id, tipo, corpo, dip.ora?.() ?? Date.now(), stato);
   registra(dip.db, "whatsapp.risposta", "fatto", origine, { operazione: stato === "proposta" ? "proposta" : "bozza", contatto: c.id, risposta: id, tipo });
+  return leggiRisposta(dip.db, id)!;
+}
+
+/** Luigi corregge il testo prima di confermarlo: si salva PULITO e si restituisce con la nuova impronta. */
+export function correggiRisposta(dip: Pick<DipendenzeWhatsapp, "db">, id: string, testo: string): RispostaWa {
+  const r = leggiRisposta(dip.db, id);
+  if (!r) throw new ErroreWhatsapp("Risposta non trovata.", 404);
+  const corpo = testoRisposta(testo);
+  if (dip.db.prepare("UPDATE wa_risposte SET testo = ? WHERE id = ? AND stato IN ('proposta','bozza','errore')").run(corpo, id).changes === 0) {
+    throw new ErroreWhatsapp("Questa risposta non è più modificabile.", 409);
+  }
   return leggiRisposta(dip.db, id)!;
 }
 
@@ -47,10 +68,16 @@ export interface EsitoInvio { ok: boolean; inviata: boolean; messaggio: string }
  * Manda una risposta. Va chiamata SOLO dopo la conferma esplicita di Luigi (la chiamano la rotta «Invia»
  * della pagina WhatsApp e la conferma della chat). Ricontrolla tutto al momento dell'invio.
  */
-export async function inviaRisposta(dip: DipendenzeWhatsapp, rispostaId: string): Promise<EsitoInvio> {
+export async function inviaRisposta(dip: DipendenzeWhatsapp, rispostaId: string, impronta: string): Promise<EsitoInvio> {
   const { db } = dip;
   const r = leggiRisposta(db, rispostaId);
   if (!r) throw new ErroreWhatsapp("Risposta non trovata.", 404);
+  // Si manda SOLO il testo che Luigi ha visto e confermato (stessa impronta di contatto + testo).
+  if (!stessaImpronta(impronta, improntaRisposta(r))) {
+    registra(db, "whatsapp.invio", "negato", "sistema", { risposta: r.id, contatto: r.contatto_id, motivo: "testo diverso da quello confermato" });
+    return { ok: false, inviata: false, messaggio: "Il testo è cambiato dopo la conferma: non ho mandato niente. Ricontrollalo e conferma di nuovo." };
+  }
+  if (DA_COMPLETARE.test(r.testo)) return { ok: false, inviata: false, messaggio: "Nel testo c'è ancora [da completare]: completalo prima di mandarlo. Non ho mandato niente." };
   // Si segna subito «in invio»: un secondo clic non manda un secondo messaggio.
   if (db.prepare("UPDATE wa_risposte SET stato = 'in_invio' WHERE id = ? AND stato IN ('proposta','bozza','errore')").run(r.id).changes === 0) {
     return { ok: false, inviata: false, messaggio: r.stato === "inviata" ? "Questa risposta è già partita." : "Questa risposta non è più in attesa." };
@@ -70,7 +97,7 @@ export async function inviaRisposta(dip: DipendenzeWhatsapp, rispostaId: string)
   }
   const nome = nomeContatto(c);
   try {
-    const wamid = await mandaTesto(coll, { waId: c.wa_id, userId: c.user_id }, r.testo, { fetchFn: dip.fetchFn, attesa: dip.attesaRiprova });
+    const wamid = await mandaTesto(coll, { waId: c.wa_id, userId: c.user_id }, r.testo, { fetchFn: dip.fetchFn, attesa: dip.attesaRiprova, risolvi: dip.risolvi });
     const ora = dip.ora?.() ?? Date.now();
     salvaMessaggio(db, { wamid, contattoId: c.id, direzione: "out", tipo: "text", quando: ora, testo: r.testo }, ora);
     db.prepare("UPDATE wa_messaggi SET stato_invio = 'sent' WHERE wamid = ?").run(wamid);
@@ -79,6 +106,12 @@ export async function inviaRisposta(dip: DipendenzeWhatsapp, rispostaId: string)
     return { ok: true, inviata: true, messaggio: `Messaggio mandato su WhatsApp a ${nome}.` };
   } catch (e) {
     const msg = (e as Error).message || "Invio non riuscito.";
+    if (e instanceof InvioIncerto) {
+      // Non si sa se è partito: niente nuovi tentativi da Jarvis (né da un secondo clic).
+      db.prepare("UPDATE wa_risposte SET stato = 'incerto', esito = ? WHERE id = ?").run(msg.slice(0, 300), r.id);
+      registra(db, "whatsapp.invio", "errore", "luigi", { risposta: r.id, contatto: c.id, motivo: "esito incerto" });
+      return { ok: false, inviata: false, messaggio: `${nome}: ${msg}` };
+    }
     torna("errore", msg);
     registra(db, "whatsapp.invio", "errore", "luigi", { risposta: r.id, contatto: c.id, motivo: msg.slice(0, 120) });
     return { ok: false, inviata: false, messaggio: `Non sono riuscito a mandare il messaggio a ${nome}: ${msg}` };

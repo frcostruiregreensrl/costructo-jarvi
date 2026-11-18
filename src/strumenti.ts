@@ -24,7 +24,13 @@ import { elencoPerAi as elencoWa, chatPerAi, trovaContattoPerAi, type ContestoWa
 import { leggiContatto, nomeContatto, nomeSpazio as nomeSpazioWa, statoChat } from "./whatsapp/archivio.js";
 import { fuoriFinestra, preparaRisposta, inviaRisposta } from "./whatsapp/risposte.js";
 import { rispondiDomanda } from "./whatsapp/attribuzione.js";
-import { MAX_TESTO_RISPOSTA } from "./whatsapp/tipi.js";
+import { MAX_TESTO_RISPOSTA, MAX_TESTO_CONFERMA } from "./whatsapp/tipi.js";
+import { pulisciTestoConfermato, improntaConferma, stessaImpronta, DA_COMPLETARE } from "./sicurezza/testoConfermato.js";
+
+/** Testo di una bozza email proposta dall'AI: al massimo questo, così sta TUTTO nella domanda di conferma. */
+export const MAX_TESTO_BOZZA_CONFERMA = 2000;
+/** Non esegue mai da solo: queste azioni partono solo da rispondiConferma, dopo il sì di Luigi. */
+const SOLO_DOPO_CONFERMA = "Non fatto: questa azione parte solo dalla conferma di Luigi.";
 
 export type EventoFlusso =
   | { tipo: "delta"; testo: string }
@@ -416,14 +422,15 @@ export const STRUMENTI = [
     verifica: (i, c) => {
       const p = contestoPosta(c);
       if (!p) return SENZA_POSTA;
+      const t = pulisciTestoConfermato(i.testo);
+      if (!t) return "La bozza è vuota.";
+      if (t.length > MAX_TESTO_BOZZA_CONFERMA) return `Bozza troppo lunga: al massimo ${MAX_TESTO_BOZZA_CONFERMA} caratteri, così Luigi la vede tutta prima di confermare. Accorciala.`;
       return mailPerBozza(p, i.id).errore ?? null;
     },
+    // La conferma vale solo per questo testo esatto (pulito) e per questa mail.
+    datiConferma: (i) => { const testo = pulisciTestoConfermato(i.testo); return { testo, impronta: improntaConferma(`mail:${i.id}`, testo) }; },
     perRegistro: (i) => ({ mail: i.id }),
-    esegui: async (i, c) => {
-      // Il permesso chiede sempre il pulsante: la bozza parte da rispondiConferma, dopo il sì di Luigi.
-      const r = await creaBozza(c.posta!, i.id, i.testo);
-      return r.messaggio;
-    },
+    esegui: () => { throw new Error(SOLO_DOPO_CONFERMA); },
   }),
   // ------------------------------------------------------------ WhatsApp (Fase 3): lettura e risposte, che partono SOLO dopo il sì di Luigi
   strumento({
@@ -493,6 +500,7 @@ export const STRUMENTI = [
     },
     azione: "whatsapp.risposta", viste: ["privato", "lavoro", "tutto"],
     input: z.object({ contatto: z.string().min(1).max(80), azienda: z.string().max(80), testo: z.string().min(1).max(MAX_TESTO_RISPOSTA) }).strict(),
+    // (oltre MAX_TESTO_CONFERMA caratteri dopo la pulizia: rifiutato in «verifica», con un messaggio chiaro)
     verifica: (i, c) => {
       const w = contestoWa(c);
       if (!w) return SENZA_WA;
@@ -500,16 +508,21 @@ export const STRUMENTI = [
       if (!t.contatto) return t.errore!;
       if (t.contatto.gruppo) return "Jarvis non scrive nei gruppi: Luigi può rispondere dal telefono.";
       if (!statoChat(c.db, t.contatto.id).dentroFinestra) return fuoriFinestra(nomeContatto(t.contatto));
+      const testo = pulisciTestoConfermato(i.testo);
+      if (!testo) return "Il messaggio è vuoto.";
+      if (testo.length > MAX_TESTO_CONFERMA) return `Messaggio troppo lungo: al massimo ${MAX_TESTO_CONFERMA} caratteri, così Luigi lo vede tutto prima di confermare. Accorcialo.`;
+      if (DA_COMPLETARE.test(testo)) return "Nel messaggio c'è [da completare]: chiedi prima a Luigi i dati mancanti. Un messaggio incompleto non si manda.";
       return null;
     },
-    datiConferma: (i, c) => ({ contattoId: trovaContattoPerAi(contestoWa(c)!, i.contatto, i.azienda).contatto?.id }),
-    perRegistro: (i) => ({ azienda: i.azienda || undefined }),
-    esegui: async (i, c) => {
-      // Il permesso chiede sempre il pulsante: l'invio parte da rispondiConferma, dopo il sì di Luigi.
-      const k = trovaContattoPerAi(contestoWa(c)!, i.contatto, i.azienda).contatto!;
-      const r = preparaRisposta(c.whatsapp!, k.id, i.testo, "risposta", "bozza", "luigi");
-      return (await inviaRisposta(c.whatsapp!, r.id)).messaggio;
+    // La conferma vale solo per questo testo esatto (pulito) e per questo contatto.
+    datiConferma: (i, c) => {
+      const contattoId = trovaContattoPerAi(contestoWa(c)!, i.contatto, i.azienda).contatto?.id ?? "";
+      const testo = pulisciTestoConfermato(i.testo);
+      return { contattoId, testo, impronta: improntaConferma(contattoId, testo) };
     },
+    perRegistro: (i) => ({ azienda: i.azienda || undefined }),
+    // Difesa in più: anche se il permesso cambiasse per sbaglio, da qui non parte niente.
+    esegui: () => { throw new Error(SOLO_DOPO_CONFERMA); },
   }),
   strumento({
     def: {
@@ -525,21 +538,17 @@ export const STRUMENTI = [
     verifica: (i, c) => {
       const w = contestoWa(c);
       if (!w) return SENZA_WA;
-      const t = trovaContattoPerAi({ ...w, vista: "tutto" }, i.contatto);
+      const t = trovaContattoPerAi(w, i.contatto);
       if (!t.contatto) return t.errore!;
       const s = spazioDaNome(w, i.azienda);
       return s.domanda ? `Non è chiaro di quale azienda: chiedilo a Luigi.\n${marcaDati("aziende", { domandaSuggerita: s.domanda })}` : null;
     },
     datiConferma: (i, c) => {
       const w = contestoWa(c)!;
-      return { contattoId: trovaContattoPerAi({ ...w, vista: "tutto" }, i.contatto).contatto?.id, spazio: spazioDaNome(w, i.azienda).spazio };
+      return { contattoId: trovaContattoPerAi(w, i.contatto).contatto?.id, spazio: spazioDaNome(w, i.azienda).spazio };
     },
     perRegistro: () => ({}),
-    esegui: (i, c) => {
-      const w = contestoWa(c)!;
-      const k = trovaContattoPerAi({ ...w, vista: "tutto" }, i.contatto).contatto!;
-      return `Fatto: ${nomeContatto(k)} è di ${rispondiDomanda(c.whatsapp!, k.id, spazioDaNome(w, i.azienda).spazio!)}.`;
-    },
+    esegui: () => { throw new Error(SOLO_DOPO_CONFERMA); },
   }),
 ];
 
@@ -613,24 +622,28 @@ export async function eseguiStrumento(nome: string, input: unknown, c: ContestoS
   }
 }
 
+/**
+ * La domanda di conferma. Per i testi che escono da Jarvis (bozza email, messaggio WhatsApp) mostra il testo
+ * INTERO e già pulito: è esattamente quello che verrà salvato o mandato (niente tagli, niente parti nascoste).
+ */
 function descriviProposta(nome: string, input: Record<string, unknown>, c?: ContestoStrumenti): string {
   if (nome === "posta_bozza") {
     const p = c ? contestoPosta(c) : null;
     const t = p ? mailPerBozza(p, String(input.id)) : {};
     const dove = t.casella && p ? `casella ${t.casella.nome} · ${nomeSpazio(t.casella.spazio, p.aziende)}` : "";
-    const testo = String(input.testo ?? "").replace(/\s+/g, " ").trim();
-    return `Vuoi che metta questa bozza nelle Bozze${dove ? ` (${dove})` : ""}, in risposta a ${t.m ? `${destinatarioRisposta(t.m)} «${oggettoRisposta(t.m.oggetto)}»` : "questa mail"}? Non verrà inviata: la mandi tu.\n\n«${testo.length > 400 ? `${testo.slice(0, 400)}…` : testo}»`;
+    const testo = pulisciTestoConfermato(String(input.testo ?? ""));
+    return `Vuoi che metta questa bozza nelle Bozze${dove ? ` (${dove})` : ""}, in risposta a ${t.m ? `${destinatarioRisposta(t.m)} «${oggettoRisposta(t.m.oggetto)}»` : "questa mail"}? Non verrà inviata: la mandi tu. Testo completo (${testo.length} caratteri):\n\n«${testo}»`;
   }
   if (nome === "whatsapp_risposta" || nome === "whatsapp_assegna_azienda") {
     const w = c ? contestoWa(c) : null;
-    const k = w ? trovaContattoPerAi(nome === "whatsapp_assegna_azienda" ? { ...w, vista: "tutto" } : w, String(input.contatto), nome === "whatsapp_risposta" ? String(input.azienda ?? "") : "").contatto : undefined;
+    const k = w ? trovaContattoPerAi(w, String(input.contatto), nome === "whatsapp_risposta" ? String(input.azienda ?? "") : "").contatto : undefined;
     const chi = k && w ? `${nomeContatto(k)} (${nomeSpazioWa(k.spazio, w.aziende)})` : String(input.contatto);
     if (nome === "whatsapp_assegna_azienda") {
       const s = w ? spazioDaNome(w, String(input.azienda)).spazio : undefined;
       return `Vuoi che ${chi} sia considerato di ${s && w ? nomeSpazioWa(s, w.aziende) : String(input.azienda)}? Me lo ricorderò per le prossime chat.`;
     }
-    const testo = String(input.testo ?? "").replace(/\s+/g, " ").trim();
-    return `Vuoi che mandi su WhatsApp a ${chi} questo messaggio? Parte solo se confermi.\n\n«${testo.length > 600 ? `${testo.slice(0, 600)}…` : testo}»`;
+    const testo = pulisciTestoConfermato(String(input.testo ?? ""));
+    return `Vuoi che mandi su WhatsApp a ${chi} questo messaggio? Parte solo se confermi. Testo completo (${testo.length} caratteri):\n\n«${testo}»`;
   }
   if (nome === "agenda_aggiungi") return `Vuoi che segni «${input.titolo}» il ${input.data}${input.ora ? ` alle ${input.ora}` : ""}?`;
   if (nome === "agenda_cancella") return `Vuoi che cancelli l'impegno «${input.titolo}»?`;
@@ -651,7 +664,7 @@ export async function rispondiConferma(db: Db, id: string, scelta: "conferma" | 
     registra(db, r.azione, "negato", "luigi", { conferma: id, motivo: "annullata da Luigi" });
     return { ok: true, messaggio: "Va bene, non faccio niente." };
   }
-  const dati = JSON.parse(r.dati) as { ids?: string[]; strumento?: string; input?: Record<string, unknown>; contattoId?: string; spazio?: string };
+  const dati = JSON.parse(r.dati) as { ids?: string[]; strumento?: string; input?: Record<string, unknown>; contattoId?: string; spazio?: string; testo?: string; impronta?: string };
   let messaggio = "Fatto.";
   if (dati.ids) {
     const indice = typeof scelta === "number" ? scelta : dati.ids.length === 1 ? 0 : -1;
@@ -674,8 +687,11 @@ export async function rispondiConferma(db: Db, id: string, scelta: "conferma" | 
     if (!posta) return { ok: false, messaggio: "La posta non è disponibile in questo momento." };
     // Si segna subito come confermata: un secondo clic non crea una seconda bozza.
     if (db.prepare("UPDATE conferme SET stato = 'confermata' WHERE id = ? AND stato = 'in_attesa'").run(id).changes === 0) return { ok: false, messaggio: "Questa richiesta non è più in attesa." };
+    // Si salva SOLO il testo mostrato nella conferma (stessa impronta).
+    const testo = dati.testo ?? "";
+    if (!dati.impronta || !stessaImpronta(dati.impronta, improntaConferma(`mail:${String(dati.input.id)}`, testo))) return { ok: false, messaggio: "Il testo non corrisponde a quello confermato: non ho fatto niente." };
     try {
-      const r = await creaBozza(posta, String(dati.input.id), String(dati.input.testo));
+      const r = await creaBozza(posta, String(dati.input.id), testo);
       return { ok: true, messaggio: r.messaggio };
     } catch (e) {
       return { ok: false, messaggio: (e as Error).message || "Bozza non riuscita." };
@@ -692,8 +708,12 @@ export async function rispondiConferma(db: Db, id: string, scelta: "conferma" | 
         if (!dati.spazio) return { ok: false, messaggio: "Non è chiaro di quale azienda: dimmelo di nuovo." };
         return { ok: true, messaggio: `Fatto: ${nomeContatto(k)} è di ${rispondiDomanda(whatsapp, k.id, dati.spazio)}. Me lo ricordo.` };
       }
-      const risposta = preparaRisposta(whatsapp, k.id, String(dati.input.testo), "risposta", "bozza", "luigi");
-      const e = await inviaRisposta(whatsapp, risposta.id);
+      // Parte SOLO il testo mostrato nella conferma: stessa impronta di contatto + testo.
+      const testo = dati.testo ?? "";
+      if (!dati.impronta || !stessaImpronta(dati.impronta, improntaConferma(k.id, testo))) return { ok: false, messaggio: "Il testo non corrisponde a quello confermato: non ho mandato niente." };
+      const risposta = preparaRisposta(whatsapp, k.id, testo, "risposta", "bozza", "luigi");
+      if (risposta.testo !== testo) return { ok: false, messaggio: "Il testo non corrisponde a quello confermato: non ho mandato niente." };
+      const e = await inviaRisposta(whatsapp, risposta.id, improntaConferma(k.id, risposta.testo));
       return { ok: e.inviata, messaggio: e.messaggio };
     } catch (e) {
       return { ok: false, messaggio: (e as Error).message || "Non riuscito." };

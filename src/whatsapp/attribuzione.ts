@@ -21,7 +21,7 @@ export const VALIDITA_CACHE_MS = 30 * 60_000;
 const SchemaControparte = z.object({ telefono: z.union([z.string(), z.number()]).nullish() }).passthrough();
 const cache = new WeakMap<Db, Map<string, { quando: number; numeri: Set<string> }>>();
 
-/** Numeri (normalizzati) delle controparti di un'azienda di Costructo. Errore = nessun numero (e si dice nel registro). */
+/** Numeri (normalizzati) delle controparti di un'azienda di Costructo. Errore = nessun numero per questo giro (e si dice nel registro). */
 async function numeriAzienda(db: Db, a: AziendaCollegata, ora: number): Promise<Set<string>> {
   let perDb = cache.get(db);
   if (!perDb) { perDb = new Map(); cache.set(db, perDb); }
@@ -43,7 +43,9 @@ async function numeriAzienda(db: Db, a: AziendaCollegata, ora: number): Promise<
     }
     registra(db, "costructo.leggi", "fatto", "sistema", { percorso: "/controparti", azienda: a.nome, scopo: "attribuzione WhatsApp" });
   } catch (e) {
+    // Un errore di Costructo NON si tiene in memoria: al giro dopo si riprova.
     registra(db, "costructo.leggi", "errore", "sistema", { percorso: "/controparti", azienda: a.nome, motivo: (e as Error).message?.slice(0, 120) });
+    return numeri;
   }
   perDb.set(a.id, { quando: ora, numeri });
   return numeri;

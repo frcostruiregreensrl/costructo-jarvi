@@ -80,11 +80,14 @@ export async function notificaUrgentiWa(dip: DipendenzeWhatsapp): Promise<number
   return inviate;
 }
 
-/** Contatti nuovi (con messaggi dal vivo) senza azienda e senza domanda aperta: si prova ad attribuirli. */
+/**
+ * Contatti con messaggi dal vivo e senza azienda: si prova ad attribuirli. Vale anche per quelli con una domanda
+ * «Di quale azienda è…?» ancora aperta: se nel frattempo il numero compare in Costructo in una sola azienda,
+ * la domanda si chiude da sola (senza nuove notifiche: la domanda aperta non si ripete).
+ */
 async function attribuisciNuovi(dip: DipendenzeWhatsapp): Promise<number> {
   const { db } = dip;
   const contatti = db.prepare(`SELECT * FROM wa_contatti c WHERE c.spazio = '' AND c.fonte_spazio = ''
-      AND NOT EXISTS (SELECT 1 FROM wa_domande d WHERE d.contatto_id = c.id AND d.stato = 'aperta')
       AND EXISTS (SELECT 1 FROM wa_messaggi m WHERE m.contatto_id = c.id AND m.storico = 0) LIMIT 50`).all() as ContattoWa[];
   let n = 0;
   for (const c of contatti) {

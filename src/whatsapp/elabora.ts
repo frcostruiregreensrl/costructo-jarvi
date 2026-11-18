@@ -2,6 +2,7 @@
 // dei messaggi mandati da Jarvis, importa lo storico, aggiorna i nomi della rubrica.
 // Qui non si chiama l'AI e non si manda niente: classificazione, domande, conferme e notifiche le fa il giro (servizio.ts).
 import type { Db } from "../db.js";
+import { CONSERVAZIONE_MS } from "../conversazioni.js";
 import { registra } from "../registro.js";
 import { SchemaValore, type MessaggioWebhook, type StatoWebhook, type ValoreWebhook } from "./schema.js";
 import { salvaContatto, salvaMessaggio } from "./archivio.js";
@@ -57,6 +58,24 @@ export function contenuto(m: MessaggioWebhook): { tipo: string; testo: string; m
   }
 }
 
+/**
+ * Chi ha scritto un messaggio dello storico: si guarda il MITTENTE, non se c'è il numero del contatto
+ * (nelle chat con un nome utente WhatsApp il numero può mancare).
+ *  - c'è l'id utente del mittente (from_user_id) → l'ha scritto il contatto;
+ *  - il mittente è il numero dell'azienda, oppure c'è un destinatario (to / to_user_id) → l'ha scritto Luigi;
+ *  - il mittente è il numero del contatto della chat → il contatto; un altro numero (azienda non nota) → Luigi.
+ */
+export function direzioneStorico(m: MessaggioWebhook, numeroAzienda: string, waIdChat?: string): "in" | "eco" {
+  if (m.from_user_id) return "in";
+  const da = normalizzaTelefono(m.from);
+  if (numeroAzienda && da === numeroAzienda) return "eco";
+  if (m.to || m.to_user_id) return "eco";
+  const contatto = normalizzaTelefono(waIdChat);
+  if (da && contatto) return da === contatto ? "in" : "eco";
+  if (da && numeroAzienda) return "in";
+  return "in";
+}
+
 interface Contesto { db: Db; ora: number; numeroAzienda: string; nomi: Map<string, string>; esito: EsitoElaborazione }
 
 /** Applica una modifica o una cancellazione (edit, revoke) al messaggio originale, se c'è. */
@@ -77,6 +96,9 @@ function modificaORevoca(c: Contesto, m: MessaggioWebhook): boolean {
 
 function salvaUno(c: Contesto, m: MessaggioWebhook, opz: { direzione: "in" | "eco"; storico: boolean; waId?: string; userId?: string }) {
   if (modificaORevoca(c, m)) return;
+  const quando = orario(m.timestamp, c.ora);
+  // Storico più vecchio di 30 giorni: non si salva nemmeno (si cancellerebbe subito).
+  if (opz.storico && quando < c.ora - CONSERVAZIONE_MS) { c.esito.ignorati++; return; }
   const gruppoId = m.group_id ? String(m.group_id).slice(0, 200) : undefined;
   const waId = normalizzaTelefono(opz.waId) ?? undefined;
   const userId = opz.userId ? String(opz.userId).slice(0, 200) : undefined;
@@ -86,7 +108,6 @@ function salvaUno(c: Contesto, m: MessaggioWebhook, opz: { direzione: "in" | "ec
   const x = contenuto(m);
   // Nei gruppi si tiene il nome di chi scrive davanti al testo (il «contatto» è il gruppo).
   const testo = gruppoId && opz.direzione === "in" ? testoBreve(`${nomeProfilo || (waId ? `Numero ${mascheraTelefono(waId)}` : "Qualcuno")}: ${x.testo}`) : x.testo;
-  const quando = orario(m.timestamp, c.ora);
   // Classificazione solo per i messaggi ricevuti dal vivo, fuori dai gruppi, con un contenuto (non reazioni).
   const daClassificare = opz.direzione === "in" && !opz.storico && x.tipo !== "reaction";
   const id = salvaMessaggio(c.db, {
@@ -176,15 +197,13 @@ export function elaboraWebhook(db: Db, corpo: { object: string; entry: Array<{ c
               const waId = t.context?.wa_id ?? t.id;
               for (const m of t.messages) {
                 // Scritto dall'azienda (da Luigi): il mittente è il numero dell'azienda, oppure non è il contatto della chat.
-                const da = normalizzaTelefono(m.from);
-                const daAzienda = !m.from_user_id && ((!!numeroAzienda && da === numeroAzienda) || (!!da && da !== normalizzaTelefono(waId)));
-                salvaUno(c, m, { direzione: daAzienda ? "eco" : "in", storico: true, waId, userId: t.context?.user_id });
+                salvaUno(c, m, { direzione: direzioneStorico(m, numeroAzienda, waId), storico: true, waId, userId: t.context?.user_id });
               }
             }
           }
           // Contenuto degli allegati dello storico: arriva come «messages» dentro il campo history.
           for (const m of val.messages) {
-            const daAzienda = !!numeroAzienda && normalizzaTelefono(m.from) === numeroAzienda && !m.from_user_id;
+            const daAzienda = direzioneStorico(m, numeroAzienda) === "eco";
             salvaUno(c, m, { direzione: daAzienda ? "eco" : "in", storico: true, waId: daAzienda ? m.to : m.from, userId: daAzienda ? m.to_user_id : m.from_user_id });
           }
           for (const m of val.message_echoes) salvaUno(c, m, { direzione: "eco", storico: true, waId: m.to, userId: m.to_user_id });

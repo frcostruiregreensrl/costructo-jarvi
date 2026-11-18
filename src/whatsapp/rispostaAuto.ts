@@ -17,7 +17,7 @@ import { mandaTesto } from "./invio.js";
 import { leggiContatto, salvaMessaggio, statoChat } from "./archivio.js";
 import { testiDi } from "./classifica.js";
 import { mascheraTelefono } from "./telefono.js";
-import { FINESTRA_MS, PRIVATO, type ContattoWa, type DipendenzeWhatsapp, type MessaggioWa } from "./tipi.js";
+import { FINESTRA_MS, InvioIncerto, PRIVATO, type ContattoWa, type DipendenzeWhatsapp, type MessaggioWa } from "./tipi.js";
 
 export const MAX_AL_GIORNO_WA = 20;
 export const GIORNI_PER_CONTATTO_WA = 7;
@@ -41,6 +41,11 @@ export function valutaConfermaWa(dip: Pick<DipendenzeWhatsapp, "db" | "cifratore
   if (lista.some((m) => m.tocca)) return no("parla di pagamenti, importi o impegni");
   if (parlaDiDenaro(...testiDi(lista))) return no("contiene parole di denaro o impegni (anche in didascalie o nomi dei file)");
   if (!c.spazio || c.spazio === PRIVATO) return no(c.spazio ? "contatto privato: mai conferme" : "azienda del contatto non ancora nota");
+  // Tutti i messaggi ricevuti dal vivo da questo contatto nelle ultime 24 ore (anche quelli non ancora classificati):
+  // basta che uno parli di soldi o impegni, o che uno non sia ancora classificato, e la conferma non parte.
+  const vivi = dip.db.prepare("SELECT * FROM wa_messaggi WHERE contatto_id = ? AND direzione = 'in' AND storico = 0 AND ricevuto > ?").all(c.id, ora - FINESTRA_MS) as MessaggioWa[];
+  if (vivi.some((m) => m.stato === "da_classificare" || m.stato === "tetto")) return no("c'è un messaggio del contatto non ancora classificato");
+  if (vivi.some((m) => m.tocca) || parlaDiDenaro(...testiDi(vivi))) return no("un messaggio del contatto parla di pagamenti, importi o impegni");
   const ultimo = lista.reduce((a, b) => (b.quando > a.quando ? b : a));
   const s = statoChat(dip.db, c.id, ora);
   if (s.ultimaRisposta >= ultimo.quando) return no("Luigi ha già risposto");
@@ -73,14 +78,15 @@ export async function mandaConfermeWa(dip: DipendenzeWhatsapp): Promise<number> 
     for (const m of lista) segna.run("in_invio", m.id);
     const coll = leggiCollegamento(dip)!;
     try {
-      const wamid = await mandaTesto(coll, { waId: c.wa_id, userId: c.user_id }, TESTO_CONFERMA_WA, { fetchFn: dip.fetchFn, attesa: dip.attesaRiprova });
+      const wamid = await mandaTesto(coll, { waId: c.wa_id, userId: c.user_id }, TESTO_CONFERMA_WA, { fetchFn: dip.fetchFn, attesa: dip.attesaRiprova, risolvi: dip.risolvi });
       salvaMessaggio(db, { wamid, contattoId: c.id, direzione: "out", tipo: "text", quando: ora, testo: TESTO_CONFERMA_WA, automatico: true }, ora);
       db.prepare("INSERT INTO wa_conferme_auto (contatto_id, quando) VALUES (?,?)").run(c.id, ora);
       for (const m of lista) segna.run("inviata", m.id);
       registra(db, "whatsapp.conferma_automatica", "fatto", "jarvis", { contatto: c.id, numero: mascheraTelefono(c.wa_id), motivo: v.motivo });
       mandate++;
     } catch (e) {
-      for (const m of lista) segna.run("errore di invio", m.id);
+      // Anche con esito incerto non si riprova mai (meglio nessuna conferma che due).
+      for (const m of lista) segna.run(e instanceof InvioIncerto ? "esito incerto" : "errore di invio", m.id);
       registra(db, "whatsapp.conferma_automatica", "errore", "jarvis", { contatto: c.id, numero: mascheraTelefono(c.wa_id), motivo: (e as Error).message?.slice(0, 120) || "invio non riuscito" });
     }
   }

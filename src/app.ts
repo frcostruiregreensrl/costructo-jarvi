@@ -222,7 +222,7 @@ export function creaApp(o: OpzioniApp) {
   // tra le controparti servono quelle collegate.
   const dipWhatsapp: DipendenzeWhatsapp = {
     db, cifratore, fuso: config.fusoOrario, cervello, modello: config.modelloPredefinito, aziende: aziendePosta,
-    aziendeCostructo: aziende, invia: o.invia ?? null, fetchFn: o.fetchWhatsapp,
+    aziendeCostructo: aziende, invia: o.invia ?? null, fetchFn: o.fetchWhatsapp, risolvi: o.risolvi,
   };
   const servizioWhatsapp = creaServizioWhatsapp(dipWhatsapp);
   rotteWebhook = creaRotteWebhook({ db, cifratore, servizio: servizioWhatsapp, hostAmmessi });

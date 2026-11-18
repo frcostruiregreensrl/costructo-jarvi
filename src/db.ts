@@ -212,7 +212,7 @@ CREATE TABLE IF NOT EXISTS wa_risposte (
   tipo TEXT NOT NULL CHECK (tipo IN ('risposta','richiesta_documento')),
   testo TEXT NOT NULL,
   creata INTEGER NOT NULL,
-  stato TEXT NOT NULL CHECK (stato IN ('proposta','bozza','in_invio','inviata','errore','scartata')),
+  stato TEXT NOT NULL CHECK (stato IN ('proposta','bozza','in_invio','inviata','errore','incerto','scartata')), -- incerto = non si sa se è partito
   wamid TEXT NOT NULL DEFAULT '',
   esito TEXT NOT NULL DEFAULT '',           -- sent, delivered, read, failed (dal webhook) o messaggio d'errore in italiano
   inviata INTEGER NOT NULL DEFAULT 0

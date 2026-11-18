@@ -6,6 +6,8 @@ import { z } from "zod";
 import type { Db } from "../db.js";
 import type { Cifratore } from "../sicurezza/cifra.js";
 import { leggiSegreto, salvaSegreto } from "../impostazioni.js";
+import type { RisolviNome } from "../calendario.js";
+import { controllaNomeServer, indirizziServer } from "../posta/rete.js";
 import { ErroreWhatsapp, type CollegamentoWa } from "./tipi.js";
 
 export const BASE_META = "https://graph.facebook.com";
@@ -94,7 +96,11 @@ export const SchemaModificaCollegamento = z.object({
   verifyToken: z.string().trim().max(200).optional(),
 }).strict();
 
-/** Indirizzo di un fornitore: solo https, porta 443, niente credenziali, niente indirizzi numerici o interni. */
+/**
+ * Indirizzo di un fornitore (forma, senza rete): solo https, porta 443, niente credenziali né parametri,
+ * un NOME pubblico (niente indirizzi numerici, localhost, .local, .internal…; il punto finale si toglie).
+ * Stesse regole dei server di posta «altro» della Fase 2 (posta/rete.ts).
+ */
 export function controllaBaseUrl(u: string): string {
   let p: URL;
   try { p = new URL(u); } catch { throw new ErroreWhatsapp("Indirizzo del fornitore non valido."); }
@@ -102,19 +108,31 @@ export function controllaBaseUrl(u: string): string {
   if (p.username || p.password) throw new ErroreWhatsapp("Niente nome utente o password nell'indirizzo.");
   if (p.port && p.port !== "443") throw new ErroreWhatsapp("Il fornitore deve usare la porta normale di https (443).");
   if (p.search || p.hash) throw new ErroreWhatsapp("Scrivi solo l'indirizzo di base, senza parametri.");
-  const h = p.hostname.toLowerCase();
-  if (/^[\d.]+$/.test(h) || h.includes(":") || h.startsWith("[") || h === "localhost" || !h.includes(".") || /\.(local|lan|internal|home|corp|localhost)$/.test(h)) {
-    throw new ErroreWhatsapp("Il fornitore deve avere un nome pubblico (per esempio waba-v2.360dialog.io).");
+  let host: string;
+  try { host = controllaNomeServer(p.hostname); } catch {
+    throw new ErroreWhatsapp("Il fornitore deve avere un nome pubblico (per esempio waba-v2.360dialog.io), non un indirizzo numerico o interno.");
   }
-  return `${p.origin}${p.pathname.replace(/\/+$/, "")}`;
+  if (/(^|\.)(nip\.io|sslip\.io|xip\.io|localtest\.me|lvh\.me)$/.test(host) || /^metadata(\.|$)/.test(host)) {
+    throw new ErroreWhatsapp("Il fornitore deve avere un nome pubblico, non un servizio che porta a indirizzi interni.");
+  }
+  return `https://${host}${p.pathname.replace(/\/+$/, "")}`;
+}
+
+/** Il nome del fornitore si risolve: basta un indirizzo interno (loopback, rete privata, link-local, metadati…) per bloccare. */
+export async function controllaFornitoreInRete(baseUrl: string, risolvi?: RisolviNome): Promise<string> {
+  const pulito = controllaBaseUrl(baseUrl);
+  try { await indirizziServer(new URL(pulito).hostname, risolvi); } catch {
+    throw new ErroreWhatsapp("L'indirizzo del fornitore non si raggiunge o porta a un indirizzo non ammesso (rete interna).");
+  }
+  return pulito;
 }
 
 /** Salva le modifiche (prima controlla tutto, poi scrive). Restituisce il collegamento salvato. */
-export function salvaCollegamento(f: Fonte, m: z.infer<typeof SchemaModificaCollegamento>): CollegamentoWa {
+export async function salvaCollegamento(f: Fonte & { risolvi?: RisolviNome }, m: z.infer<typeof SchemaModificaCollegamento>): Promise<CollegamentoWa> {
   const prima = leggiCollegamento(f);
   const provider = m.provider ?? prima?.provider ?? "meta";
   let baseUrl = provider === "bsp" ? (m.baseUrl !== undefined ? m.baseUrl : prima?.baseUrl ?? "") : "";
-  if (provider === "bsp" && baseUrl) baseUrl = controllaBaseUrl(baseUrl);
+  if (provider === "bsp" && baseUrl) baseUrl = await controllaFornitoreInRete(baseUrl, f.risolvi);
   const versione = m.versione !== undefined ? (m.versione || VERSIONE_PREDEFINITA) : prima?.versione || VERSIONE_PREDEFINITA;
   if (!/^v\d{1,3}\.\d{1,2}$/.test(versione)) throw new ErroreWhatsapp("La versione della Graph API si scrive come v27.0.");
   const phoneNumberId = m.phoneNumberId !== undefined ? m.phoneNumberId : prima?.phoneNumberId ?? "";

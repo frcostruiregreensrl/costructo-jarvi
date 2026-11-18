@@ -139,6 +139,13 @@ Nessuno strumento manda niente da solo: `whatsapp_risposta` e `whatsapp_assegna_
 una volta (doppio clic: un solo messaggio). Fuori dalle 24 ore o nei gruppi non si prepara niente. Jarvis non manda mai lo stato
 «letto» (non esiste il codice per farlo). Conferme automatiche: spente di serie, regole in [FASE3.md](FASE3.md).
 
+### Testo confermato (dopo la revisione)
+La domanda di conferma mostra il testo intero e ripulito (`src/sicurezza/testoConfermato.ts`: niente caratteri bidi, a larghezza zero
+o di controllo, niente file di spazi); parte o va nelle Bozze la stessa stringa, legata all'impronta SHA-256 di destinatario + testo.
+Dalla chat: WhatsApp al massimo 1000 caratteri, bozza email 2000; «[da completare]» rifiutato dal server per WhatsApp. Invii ripetuti
+solo se sicuramente non partiti (429, collegamento mai aperto); altrimenti «esito incerto». Indirizzo del fornitore controllato anche
+con il DNS (nessun indirizzo interno) al salvataggio e a ogni invio.
+
 ### Dati personali
 - Numeri di telefono: nel registro solo le ultime 3 cifre (`•••567`), nelle notifiche **mai** (solo il nome del contatto, o
   nemmeno quello con «nascondi contenuto»); nella pagina WhatsApp mascherati; all'AI non vanno.

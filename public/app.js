@@ -229,7 +229,8 @@ function mostraNumero(e) {
 function mostraConferma(e) {
   const box = crea("div", "conferma");
   box.setAttribute("role", "group");
-  box.append(crea("p", "", e.domanda));
+  // Testo intero, a capo compresi: è esattamente quello che verrà mandato o salvato.
+  box.append(crea("p", "testo-conferma", e.domanda));
   const azioni = crea("div", "azioni");
   const rispondi = async (scelta) => {
     azioni.querySelectorAll("button").forEach((b) => (b.disabled = true));
@@ -958,19 +959,31 @@ async function riempiChat(id, box, aziende) {
   prepara.addEventListener("click", () => apriRispostaWa(d, zona, prepara, () => riempiChat(id, box, aziende)));
   box.append(prepara, zona);
 }
-/** Conferma esplicita dentro la pagina: il messaggio parte solo dopo «Sì, manda». */
-function chiediConfermaInvio(d, testo, zona, manda) {
+/**
+ * Conferma esplicita dentro la pagina: il messaggio parte solo dopo «Sì, manda».
+ * `r` arriva dal server (testo già pulito + impronta): si mostra quel testo e si manda quell'impronta,
+ * così parte esattamente il testo visto (non quello che c'è nella casella al momento del clic).
+ */
+function chiediConfermaInvio(d, r, zona, esito, ricarica) {
   zona.querySelector(".wa-conferma")?.remove();
   const box = crea("div", "conferma wa-conferma");
   box.setAttribute("role", "group");
   box.append(crea("p", "", `Mando questo messaggio su WhatsApp a ${d.contatto.nome} (${d.contatto.nomeSpazio})? Parte subito e non si può ritirare da Jarvis.`));
-  box.append(crea("p", "wa-anteprima", testo));
+  box.append(crea("p", "wa-anteprima", r.testo));
   const azioni = crea("div", "azioni");
   const si = crea("button", "primario", "Sì, manda");
   const no = crea("button", "secondario", "Annulla");
   si.type = "button"; no.type = "button";
   no.addEventListener("click", () => box.remove());
-  si.addEventListener("click", async () => { si.disabled = true; no.disabled = true; await manda(); box.remove(); });
+  si.addEventListener("click", async () => {
+    si.disabled = true; no.disabled = true;
+    try {
+      const e = await api(`/api/whatsapp/risposte/${encodeURIComponent(r.id)}/invia`, { metodo: "POST", corpo: { conferma: true, impronta: r.impronta } });
+      esito.className = e.inviata ? "esito" : "esito male"; esito.textContent = e.messaggio;
+      if (e.inviata) setTimeout(ricarica, 1200);
+    } catch (err) { if (err instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = err.message; }
+    box.remove();
+  });
   azioni.append(si, no);
   box.append(azioni);
   zona.append(box);
@@ -978,7 +991,7 @@ function chiediConfermaInvio(d, testo, zona, manda) {
 }
 function schedaRisposta(d, r, ricarica) {
   const box = crea("div", "zona-bozza wa-risposta");
-  box.append(crea("p", "sottotitolo", r.tipo === "richiesta_documento" ? "Jarvis propone di chiedere la fattura o il documento (si parla di un pagamento senza documento):" : r.stato === "errore" ? "Risposta non partita:" : "Risposta preparata, non ancora mandata:"));
+  box.append(crea("p", "sottotitolo", r.stato === "incerto" ? "Esito incerto: controlla sul telefono se è arrivata (Jarvis non riprova da solo)." : r.tipo === "richiesta_documento" ? "Jarvis propone di chiedere la fattura o il documento (si parla di un pagamento senza documento):" : r.stato === "errore" ? "Risposta non partita:" : "Risposta preparata, non ancora mandata:"));
   const idArea = `risposta-${r.id}`;
   const etichetta = crea("label", "nascosto", "Testo della risposta"); etichetta.htmlFor = idArea;
   const area = crea("textarea", "testo-bozza"); area.id = idArea; area.value = r.testo; area.rows = 4; area.maxLength = 4000;
@@ -986,13 +999,16 @@ function schedaRisposta(d, r, ricarica) {
   if (r.esito && r.stato !== "inviata") esito.textContent = r.esito;
   const invia = crea("button", "primario", "Invia"); invia.type = "button";
   const scarta = crea("button", "secondario", "Scarta"); scarta.type = "button";
-  invia.addEventListener("click", () => chiediConfermaInvio(d, area.value, box, async () => {
+  if (r.stato === "incerto") { invia.hidden = true; }
+  invia.addEventListener("click", async () => {
+    if (/\[\s*da\s+completare\s*\]/i.test(area.value)) { esito.className = "esito male"; esito.textContent = "C'è ancora [da completare]: completa il testo prima di mandarlo."; return; }
     try {
-      const e = await api(`/api/whatsapp/risposte/${encodeURIComponent(r.id)}/invia`, { metodo: "POST", corpo: { conferma: true, testo: area.value } });
-      esito.className = e.inviata ? "esito" : "esito male"; esito.textContent = e.messaggio;
-      if (e.inviata) setTimeout(ricarica, 1200);
+      // Il server salva il testo pulito e restituisce testo + impronta: la conferma mostra quello.
+      const pulita = await api(`/api/whatsapp/risposte/${encodeURIComponent(r.id)}`, { metodo: "PATCH", corpo: { testo: area.value } });
+      area.value = pulita.testo;
+      chiediConfermaInvio(d, pulita, box, esito, ricarica);
     } catch (err) { if (err instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = err.message; }
-  }));
+  });
   scarta.addEventListener("click", async () => { try { await api(`/api/whatsapp/risposte/${encodeURIComponent(r.id)}`, { metodo: "DELETE" }); ricarica(); } catch (err) { esito.textContent = err.message; } });
   const azioni = crea("div", "azioni-modulo"); azioni.append(invia, scarta);
   box.append(etichetta, area, azioni, esito);
@@ -1014,17 +1030,19 @@ async function apriRispostaWa(d, zona, pulsante, ricarica) {
   const annulla = crea("button", "secondario", "Annulla"); annulla.type = "button";
   const esito = crea("p", "esito"); esito.setAttribute("role", "status");
   annulla.addEventListener("click", () => { zona.replaceChildren(); pulsante.disabled = false; pulsante.focus(); });
-  invia.addEventListener("click", () => {
+  let salvata = null; // la bozza già salvata sul server (al secondo «Invia» si corregge quella, non se ne crea un'altra)
+  invia.addEventListener("click", async () => {
+    esito.className = "esito"; esito.textContent = "";
     if (!area.value.trim()) { esito.className = "esito male"; esito.textContent = "Scrivi il testo della risposta."; return; }
-    if (/\[da completare\]/i.test(area.value)) { esito.className = "esito male"; esito.textContent = "C'è ancora [da completare]: completa il testo prima di mandarlo."; return; }
-    chiediConfermaInvio(d, area.value, zona, async () => {
-      try {
-        const r = await api(`/api/whatsapp/chat/${encodeURIComponent(d.contatto.id)}/risposte`, { metodo: "POST", corpo: { testo: area.value } });
-        const e = await api(`/api/whatsapp/risposte/${encodeURIComponent(r.id)}/invia`, { metodo: "POST", corpo: { conferma: true } });
-        esito.className = e.inviata ? "esito" : "esito male"; esito.textContent = e.messaggio;
-        if (e.inviata) setTimeout(ricarica, 1200);
-      } catch (err) { if (err instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = err.message; }
-    });
+    if (/\[\s*da\s+completare\s*\]/i.test(area.value)) { esito.className = "esito male"; esito.textContent = "C'è ancora [da completare]: completa il testo prima di mandarlo."; return; }
+    try {
+      // Il server salva la bozza pulita e restituisce testo + impronta: la conferma mostra QUEL testo e manda QUELL'impronta.
+      salvata = salvata
+        ? await api(`/api/whatsapp/risposte/${encodeURIComponent(salvata.id)}`, { metodo: "PATCH", corpo: { testo: area.value } })
+        : await api(`/api/whatsapp/chat/${encodeURIComponent(d.contatto.id)}/risposte`, { metodo: "POST", corpo: { testo: area.value } });
+      area.value = salvata.testo;
+      chiediConfermaInvio(d, salvata, zona, esito, ricarica);
+    } catch (err) { if (err instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = err.message; }
   });
   const azioni = crea("div", "azioni-modulo"); azioni.append(invia, annulla);
   if (zona.firstChild?.classList?.contains("vuoto")) zona.replaceChildren();

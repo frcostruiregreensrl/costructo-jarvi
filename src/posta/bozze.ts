@@ -9,6 +9,7 @@ import { marcaDati, ETICHETTA } from "../dati.js";
 import { leggiImpostazioni } from "../impostazioni.js";
 import { registra } from "../registro.js";
 import { leggiMessaggio, nuovoId } from "./archivio.js";
+import { pulisciTestoConfermato } from "../sicurezza/testoConfermato.js";
 import { trovaCasella, nomeSpazio } from "./caselle.js";
 import { ErrorePosta, type Casella, type DipendenzePosta, type MessaggioPosta } from "./tipi.js";
 
@@ -49,8 +50,10 @@ export async function creaBozza(dip: DipendenzePosta, messaggioId: string, testo
   if (!m) throw new ErrorePosta("Mail non trovata (forse più vecchia di 30 giorni).", 404);
   const c = trovaCasella(dip, m.casella_id);
   if (!c) throw new ErrorePosta("La casella di questa mail non è più collegata.", 404);
-  const corpo = testo.replace(/\r\n/g, "\n").trim().slice(0, MAX_TESTO_BOZZA);
+  // Testo pulito dai caratteri invisibili (lo stesso mostrato nella conferma); troppo lungo → rifiutato, mai tagliato di nascosto.
+  const corpo = pulisciTestoConfermato(testo);
   if (!corpo) throw new ErrorePosta("La bozza è vuota.");
+  if (corpo.length > MAX_TESTO_BOZZA) throw new ErrorePosta(`La bozza è troppo lunga (al massimo ${MAX_TESTO_BOZZA} caratteri).`);
   const id = nuovoId("b");
   const ora = dip.ora?.() ?? Date.now();
   const a = destinatarioRisposta(m), oggetto = oggettoRisposta(m.oggetto);

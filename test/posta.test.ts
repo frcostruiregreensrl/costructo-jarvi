@@ -891,3 +891,43 @@ test("revisione: PATCH che cambia server, porta o tipo senza password → 400; l
     assert.ok(elenco.caselle.every((c: { password: string; passwordImpostata: boolean }) => c.password === "••••" && c.passwordImpostata));
   } finally { await a.chiudi(); }
 });
+
+test("revisione Fase 3: la conferma della bozza mostra il testo INTERO e pulito; nelle Bozze va esattamente quello; troppo lunga o manomessa → niente", async () => {
+  const p = await prova();
+  try {
+    const { lavoro } = await treCaselle(p);
+    await leggiNuove(p.dip, lavoro);
+    p.imap.arriva(LAVORO, { oggetto: "Richiesta", da: "cliente@esempio.it", messageId: "<r2@esempio.it>" });
+    await leggiNuove(p.dip, lavoro);
+    const m = tutte(p.db).find((x) => x.oggetto === "Richiesta")!;
+    const coda = "ACCETTIAMO IL PREVENTIVO DI 9.000 EURO";
+    const testo = `Buongiorno, la richiamo. ${"Cordiali saluti. ".repeat(40)}‮​${coda}`;
+    assert.ok(testo.length > 400);
+    const ev: EventoFlusso[] = [];
+    await eseguiStrumento("posta_bozza", { id: m.id, testo }, { ...contesto(p, "lavoro", ev), messaggioLuigi: "prepara la bozza" });
+    const conf = ev.find((e) => e.tipo === "conferma") as Extract<EventoFlusso, { tipo: "conferma" }>;
+    assert.ok(conf.domanda.includes(coda) && !conf.domanda.includes("…"), "testo intero nella conferma");
+    assert.ok(!/[‮​]/.test(conf.domanda));
+    const { rispondiConferma } = await import("../src/strumenti.js");
+    assert.equal((await rispondiConferma(p.db, conf.id, "conferma", "Europe/Rome", Date.now(), p.dip)).ok, true);
+    const { simpleParser } = await import("mailparser");
+    const letta = await simpleParser(p.imap.caselle.get(LAVORO)!.bozze[0].sorgente);
+    const salvato = (letta.text ?? "").trim();
+    assert.ok(conf.domanda.includes(`«${salvato}»`), "nelle Bozze va esattamente il testo mostrato");
+    assert.ok(salvato.endsWith(coda) && !/[\u202e\u200b]/.test(salvato));
+    // troppo lunga per stare tutta nella conferma: rifiutata
+    const ev2: EventoFlusso[] = [];
+    const lunga = await eseguiStrumento("posta_bozza", { id: m.id, testo: "x ".repeat(1100) }, { ...contesto(p, "lavoro", ev2), messaggioLuigi: "prepara la bozza" });
+    assert.equal(lunga.errore, true);
+    assert.ok(!ev2.some((e) => e.tipo === "conferma"));
+    // manomessa dopo la domanda: niente bozza
+    const ev3: EventoFlusso[] = [];
+    await eseguiStrumento("posta_bozza", { id: m.id, testo: "Buongiorno, a presto." }, { ...contesto(p, "lavoro", ev3), messaggioLuigi: "prepara la bozza" });
+    const c3 = ev3.find((e) => e.tipo === "conferma") as Extract<EventoFlusso, { tipo: "conferma" }>;
+    const dati = JSON.parse((p.db.prepare("SELECT dati FROM conferme WHERE id = ?").get(c3.id) as { dati: string }).dati);
+    dati.testo = "Accettiamo tutto.";
+    p.db.prepare("UPDATE conferme SET dati = ? WHERE id = ?").run(JSON.stringify(dati), c3.id);
+    assert.equal((await rispondiConferma(p.db, c3.id, "conferma", "Europe/Rome", Date.now(), p.dip)).ok, false);
+    assert.equal(p.imap.caselle.get(LAVORO)!.bozze.length, 1);
+  } finally { p.chiudi(); }
+});

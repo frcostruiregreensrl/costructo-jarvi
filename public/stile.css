@@ -164,6 +164,7 @@ body.ascolta .stato-voce { color: var(--ambra); }
 .numero-grande b { font-size: 32px; font-variant-numeric: tabular-nums; }
 .conferma { justify-self: stretch; border: 1px solid var(--ambra); background: var(--ambra-tenue); border-radius: 14px; padding: 12px 14px; display: grid; gap: 8px; }
 .conferma p { margin: 0; font-weight: 600; }
+.conferma p.testo-conferma { white-space: pre-wrap; overflow-wrap: anywhere; }
 .conferma .azioni { display: flex; flex-wrap: wrap; gap: 8px; }
 .conferma button { min-height: 44px; }
 .avviso { justify-self: stretch; color: var(--ambra); font-weight: 600; text-align: center; }

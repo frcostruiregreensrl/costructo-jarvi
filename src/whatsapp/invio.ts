@@ -6,16 +6,28 @@
 // Corpo: {"messaging_product":"whatsapp","recipient_type":"individual","to":…,"type":"text","text":{…}}.
 // Jarvis NON segna mai i messaggi come letti (niente «spunte blu»): Luigi li legge sul telefono.
 // Qui non c'è nessuna funzione per farlo, e nessun altro tipo di richiesta verso Meta.
-import { BASE_META } from "./collegamento.js";
+import type { RisolviNome } from "../calendario.js";
+import { BASE_META, controllaFornitoreInRete } from "./collegamento.js";
 import { spiegaErroreMeta } from "./elabora.js";
-import { ErroreWhatsapp, MAX_TESTO_RISPOSTA, type CollegamentoWa } from "./tipi.js";
+import { ErroreWhatsapp, InvioIncerto, MAX_TESTO_RISPOSTA, type CollegamentoWa } from "./tipi.js";
 
 export interface Destinatario { waId: string; userId: string }
-export interface OpzioniInvio { fetchFn?: typeof fetch; attesa?: (ms: number) => Promise<void>; timeoutMs?: number }
+export interface OpzioniInvio { fetchFn?: typeof fetch; attesa?: (ms: number) => Promise<void>; timeoutMs?: number; risolvi?: RisolviNome }
 
 const MAX_RISPOSTA_BYTE = 64 * 1024;
-/** Tentativi in tutto (1 + 2 ripetizioni), solo per errori di rete, 429 e 5xx. */
+/**
+ * Tentativi in tutto (1 + 2 ripetizioni). Si ripete SOLO quando si è sicuri che il messaggio non è partito:
+ * risposta 429 (WhatsApp non l'ha accettato) o collegamento mai aperto (indirizzo che non risponde o nome non trovato).
+ * Tempo scaduto, connessione caduta a metà o errore 5xx: esito INCERTO, nessuna ripetizione (niente doppioni).
+ */
 export const TENTATIVI = 3;
+const PRIMA_DI_PARTIRE = /^(ECONNREFUSED|ENOTFOUND|EAI_AGAIN)$/;
+
+/** Codice dell'errore di rete (fetch di Node lo mette in «cause»). */
+function codiceRete(e: unknown): string {
+  const x = e as { code?: string; cause?: { code?: string; cause?: { code?: string } } };
+  return String(x?.cause?.code ?? x?.cause?.cause?.code ?? x?.code ?? "");
+}
 
 export function indirizzoInvio(c: CollegamentoWa): string {
   if (c.provider === "meta") return `${BASE_META}/${encodeURIComponent(c.versione)}/${encodeURIComponent(c.phoneNumberId)}/messages`;
@@ -46,6 +58,8 @@ export async function mandaTesto(c: CollegamentoWa, d: Destinatario, testo: stri
   if (!corpo) throw new ErroreWhatsapp("Il messaggio è vuoto.");
   if (corpo.length > MAX_TESTO_RISPOSTA) throw new ErroreWhatsapp("Il messaggio è troppo lungo (al massimo 4000 caratteri).");
   if (!d.waId && !d.userId) throw new ErroreWhatsapp("Non so a chi mandarlo: manca il numero del contatto.");
+  // Il token va SOLO all'indirizzo configurato: per un fornitore si ricontrolla ogni volta che il nome non porti alla rete interna.
+  if (c.provider === "bsp") await controllaFornitoreInRete(c.baseUrl, o.risolvi);
   const f = o.fetchFn ?? fetch;
   const attesa = o.attesa ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let ultimo = "WhatsApp non risponde in questo momento.";
@@ -57,9 +71,9 @@ export async function mandaTesto(c: CollegamentoWa, d: Destinatario, testo: stri
         method: "POST", headers: intestazioniInvio(c), body: JSON.stringify(corpoTesto(d, corpo)),
         redirect: "error", signal: AbortSignal.timeout(o.timeoutMs ?? 15_000),
       });
-    } catch {
-      ultimo = "WhatsApp non risponde in questo momento (rete).";
-      continue;
+    } catch (e) {
+      if (PRIMA_DI_PARTIRE.test(codiceRete(e))) { ultimo = "WhatsApp non risponde in questo momento (rete)."; continue; }
+      throw new InvioIncerto();
     }
     const grezzo = (await r.text().catch(() => "")).slice(0, MAX_RISPOSTA_BYTE);
     let dati: { messages?: Array<{ id?: unknown }>; error?: { code?: number; message?: string; error_data?: { details?: string } } } = {};
@@ -67,11 +81,12 @@ export async function mandaTesto(c: CollegamentoWa, d: Destinatario, testo: stri
     if (r.ok) {
       const id = dati.messages?.[0]?.id;
       if (typeof id === "string" && id) return id.slice(0, 300);
-      throw new ErroreWhatsapp("WhatsApp ha accettato la richiesta ma non ha dato l'id del messaggio: controlla sul telefono.");
+      throw new InvioIncerto();
     }
     if (r.status === 401 || r.status === 403) throw new ErroreWhatsapp(spiegaErroreMeta(dati.error?.code ?? 190));
     ultimo = dati.error ? spiegaErroreMeta(dati.error.code, dati.error.message) : `WhatsApp ha risposto con un errore (${r.status}).`;
-    if (r.status !== 429 && r.status < 500) throw new ErroreWhatsapp(ultimo);
+    if (r.status >= 500) throw new InvioIncerto();
+    if (r.status !== 429) throw new ErroreWhatsapp(ultimo);
   }
   throw new ErroreWhatsapp(ultimo, 502);
 }

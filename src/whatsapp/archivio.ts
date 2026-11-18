@@ -31,6 +31,11 @@ export function salvaContatto(db: Db, d: DatiContatto & { gruppoId?: string }, o
   const chiave = chiaveContatto(d);
   if (!chiave) return null;
   let c = db.prepare("SELECT * FROM wa_contatti WHERE chiave = ?").get(chiave) as ContattoWa | undefined;
+  // Numero e id utente portano a due contatti diversi (prima noto solo con l'id, poi con il numero): si uniscono.
+  if (c && !d.gruppoId && d.waId && d.userId) {
+    const doppio = db.prepare("SELECT * FROM wa_contatti WHERE user_id = ? AND gruppo = 0 AND id <> ?").get(d.userId, c.id) as ContattoWa | undefined;
+    if (doppio) c = unisciContatti(db, c, doppio, ora);
+  }
   if (!c && !d.gruppoId && d.waId && d.userId) c = db.prepare("SELECT * FROM wa_contatti WHERE user_id = ? AND gruppo = 0").get(d.userId) as ContattoWa | undefined;
   if (!c && !d.gruppoId && d.userId && !d.waId) c = db.prepare("SELECT * FROM wa_contatti WHERE user_id = ? AND gruppo = 0").get(d.userId) as ContattoWa | undefined;
   if (!c) {
@@ -44,6 +49,32 @@ export function salvaContatto(db: Db, d: DatiContatto & { gruppoId?: string }, o
     .run(waId, c.user_id || d.userId || "", c.gruppo ? c.chiave : (waId || c.chiave), d.nomeProfilo || c.nome_profilo,
       d.nomeRubrica === null ? "" : d.nomeRubrica || c.nome_rubrica, ora, c.id);
   return leggiContatto(db, c.id)!;
+}
+
+/**
+ * Unisce `doppio` dentro `tenuto` (quello con il numero): messaggi, risposte, conferme e domande passano a `tenuto`,
+ * poi `doppio` si cancella. La scelta di Luigi sull'azienda resta: se ne ha fatta una sola, vale quella; se sono due
+ * diverse, si tiene quella del contatto con il numero e si apre una domanda «Di quale azienda è…?».
+ */
+export function unisciContatti(db: Db, tenuto: ContattoWa, doppio: ContattoWa, ora = Date.now()): ContattoWa {
+  db.transaction(() => {
+    for (const t of ["wa_messaggi", "wa_risposte", "wa_conferme_auto", "wa_domande"]) db.prepare(`UPDATE ${t} SET contatto_id = ? WHERE contatto_id = ?`).run(tenuto.id, doppio.id);
+    const luigiT = tenuto.fonte_spazio === "luigi", luigiD = doppio.fonte_spazio === "luigi";
+    let spazio = tenuto.spazio, fonte = tenuto.fonte_spazio;
+    if (!luigiT && (luigiD || (!spazio && doppio.spazio))) { spazio = doppio.spazio; fonte = doppio.fonte_spazio; }
+    db.prepare(`UPDATE wa_contatti SET user_id = ?, nome_profilo = ?, nome_rubrica = ?, spazio = ?, fonte_spazio = ?, proposta_spazio = ?,
+        ultima_notifica = ?, aggiornato = ? WHERE id = ?`)
+      .run(tenuto.user_id || doppio.user_id, tenuto.nome_profilo || doppio.nome_profilo, tenuto.nome_rubrica || doppio.nome_rubrica, spazio, fonte,
+        tenuto.proposta_spazio || doppio.proposta_spazio, Math.max(tenuto.ultima_notifica, doppio.ultima_notifica), ora, tenuto.id);
+    db.prepare("DELETE FROM wa_contatti WHERE id = ?").run(doppio.id);
+    // Doppioni di domande aperte: ne resta una.
+    const aperte = db.prepare("SELECT id FROM wa_domande WHERE contatto_id = ? AND stato = 'aperta' ORDER BY creata").all(tenuto.id) as Array<{ id: string }>;
+    for (const a of aperte.slice(1)) db.prepare("DELETE FROM wa_domande WHERE id = ?").run(a.id);
+    if (luigiT && luigiD && tenuto.spazio !== doppio.spazio && !aperte.length) {
+      db.prepare("INSERT INTO wa_domande (id, contatto_id, creata, stato) VALUES (?,?,?, 'aperta')").run(nuovoId("d"), tenuto.id, ora);
+    }
+  })();
+  return leggiContatto(db, tenuto.id)!;
 }
 
 /** Nome da mostrare: rubrica di Luigi, poi profilo WhatsApp, poi numero mascherato. */
@@ -114,11 +145,14 @@ export interface StatoChat {
 export function statoChat(db: Db, contattoId: string, ora = Date.now()): StatoChat {
   const r = db.prepare(`SELECT
       (SELECT MAX(quando) FROM wa_messaggi WHERE contatto_id = ? AND direzione = 'in' AND tipo <> 'reaction' AND revocato = 0) AS ultimo_in,
-      (SELECT MAX(quando) FROM wa_messaggi WHERE contatto_id = ? AND direzione = 'in' AND storico = 0) AS ultimo_in_vivo,
-      (SELECT MAX(quando) FROM wa_messaggi WHERE contatto_id = ? AND direzione IN ('out','eco') AND automatico = 0 AND tipo <> 'reaction') AS ultima_risposta`)
+      (SELECT MAX(quando) FROM wa_messaggi WHERE contatto_id = ? AND direzione = 'in' AND storico = 0
+        AND tipo NOT IN ('reaction','unsupported','revoke','edit') AND revocato = 0) AS ultimo_in_vivo,
+      (SELECT MAX(quando) FROM wa_messaggi WHERE contatto_id = ? AND direzione IN ('out','eco') AND automatico = 0 AND tipo <> 'reaction'
+        AND stato_invio <> 'failed') AS ultima_risposta`)
     .get(contattoId, contattoId, contattoId) as { ultimo_in: number | null; ultimo_in_vivo: number | null; ultima_risposta: number | null };
   const ultimoRicevuto = r.ultimo_in ?? 0, ultimaRisposta = r.ultima_risposta ?? 0;
-  // La finestra si apre solo con un messaggio arrivato dal vivo (quelli dello storico non contano, regola di Meta).
+  // La finestra si apre solo con un vero messaggio del contatto arrivato dal vivo (non storico, reazioni, cancellati o
+  // messaggi di sistema); un messaggio di Jarvis non consegnato («failed») non vale come risposta.
   return { ultimoRicevuto, ultimaRisposta, senzaRisposta: ultimoRicevuto > ultimaRisposta, dentroFinestra: !!r.ultimo_in_vivo && ora - r.ultimo_in_vivo < FINESTRA_MS };
 }
 
@@ -182,7 +216,7 @@ export function leggiRisposta(db: Db, id: string): RispostaWa | undefined {
   return db.prepare("SELECT * FROM wa_risposte WHERE id = ?").get(id) as RispostaWa | undefined;
 }
 export function risposteAperte(db: Db, contattoId: string): RispostaWa[] {
-  return db.prepare("SELECT * FROM wa_risposte WHERE contatto_id = ? AND stato IN ('proposta','bozza','in_invio','errore') ORDER BY creata DESC LIMIT 10").all(contattoId) as RispostaWa[];
+  return db.prepare("SELECT * FROM wa_risposte WHERE contatto_id = ? AND stato IN ('proposta','bozza','in_invio','errore','incerto') ORDER BY creata DESC LIMIT 10").all(contattoId) as RispostaWa[];
 }
 
 // ---------------------------------------------------------------- pulizia (30 giorni)
@@ -193,7 +227,8 @@ export function risposteAperte(db: Db, contattoId: string): RispostaWa[] {
 export function pulisciWhatsappVecchio(db: Db, ora = Date.now()): number {
   const limite = ora - CONSERVAZIONE_MS;
   return db.transaction(() => {
-    const tolti = db.prepare("DELETE FROM wa_messaggi WHERE ricevuto < ?").run(limite).changes;
+    // Vale sia la data di arrivo in Jarvis sia la data del messaggio (lo storico importato può essere vecchio).
+    const tolti = db.prepare("DELETE FROM wa_messaggi WHERE ricevuto < ? OR quando < ?").run(limite, limite).changes;
     db.prepare("DELETE FROM wa_risposte WHERE creata < ?").run(limite);
     db.prepare("DELETE FROM wa_conferme_auto WHERE quando < ?").run(limite);
     db.prepare("DELETE FROM wa_domande WHERE creata < ?").run(limite);
