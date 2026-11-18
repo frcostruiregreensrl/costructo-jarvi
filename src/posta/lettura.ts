@@ -49,7 +49,7 @@ export async function leggiNuove(dip: DipendenzePosta, c: Casella): Promise<Esit
       }
     }
     if (primo && !uids.length) ultimo = Math.max(0, box.uidNext - 1);
-    scriviStatoLettura(dip.db, c.id, { uidValidity: box.uidValidity, ultimoUid: ultimo, esito: "ok", messaggio: nuove.length ? `${nuove.length} nuove` : "nessuna novità" }, ora);
+    scriviStatoLettura(dip.db, c.id, { uidValidity: box.uidValidity, ultimoUid: ultimo, esito: "ok", messaggio: nuove.length ? `${nuove.length} ${nuove.length === 1 ? "nuova" : "nuove"}` : "nessuna novità" }, ora);
     if (nuove.length) registra(dip.db, "posta.leggi", "fatto", "sistema", { casella: c.nome, nuove: nuove.length, primoControllo: primo });
     return { casella: c.id, nuove };
   } catch (e) {

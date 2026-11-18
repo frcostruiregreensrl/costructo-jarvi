@@ -93,7 +93,7 @@ export function montaRotteFase2(app: Express, o: OpzioniRotte): void {
     const nome = (id: string) => caselle.find((c) => c.id === id)?.nome ?? id;
     const errori = esito.caselle.filter((c) => c.errore);
     const nuove = esito.caselle.reduce((t, c) => t + c.nuove.length, 0);
-    const parti = [nuove ? `${nuove} mail nuove.` : "Nessuna mail nuova."];
+    const parti = [nuove ? `${nuove} ${nuove === 1 ? "mail nuova" : "mail nuove"}.` : "Nessuna mail nuova."];
     if (errori.length) parti.push(errori.map((c) => `${nome(c.casella)}: ${c.errore}`).join(" · "));
     if (esito.classifica?.tetto) parti.push("Tetto di spesa raggiunto: alcune mail restano senza riassunto.");
     res.json({ ok: !errori.length, messaggio: parti.join(" "), nuove, tetto: !!esito.classifica?.tetto });

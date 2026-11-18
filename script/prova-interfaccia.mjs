@@ -71,7 +71,7 @@ try {
       controlla(`${nome}: nessuno scorrimento orizzontale`, sbordo <= 0, `${sbordo}px`);
       await pagina.screenshot({ path: `${cartella}/home-${nome}.png`, fullPage: larghezza === 390 });
 
-      for (const p of ["memoria", "registro", "spesa", "impostazioni"]) {
+      for (const p of ["posta", "memoria", "registro", "spesa", "impostazioni"]) {
         await pagina.evaluate((h) => { location.hash = h; }, p);
         await pagina.waitForTimeout(400);
         const sb = await pagina.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -82,6 +82,33 @@ try {
         await pagina.evaluate(() => { location.hash = "memoria"; });
         await pagina.waitForSelector("#listaMemorie li");
         controlla("memorie visibili e divise", (await pagina.locator("#listaMemorie li.lavoro").count()) === 1 && (await pagina.locator("#listaMemorie li.privato").count()) === 2);
+        // Posta: gruppi per azienda e privato, urgente evidenziata, dettaglio e bozza (mai inviata)
+        await pagina.evaluate(() => { location.hash = "posta"; });
+        await pagina.waitForSelector(".posta-mail");
+        const gruppi = await pagina.locator(".gruppo-posta h2").allTextContents();
+        controlla("posta divisa per azienda e privato", gruppi.length === 3 && gruppi.some((g) => g.startsWith("Privato")), gruppi.join(" | "));
+        controlla("mail urgente evidenziata", (await pagina.locator(".posta-mail.urgente").count()) === 1);
+        await pagina.locator(".posta-mail.urgente button", { hasText: "Apri" }).click();
+        await pagina.waitForSelector(".estratto");
+        await pagina.locator(".posta-mail.urgente button", { hasText: "Prepara bozza di risposta" }).click();
+        await pagina.waitForSelector(".testo-bozza");
+        controlla("bozza proposta e modificabile", ((await pagina.inputValue(".testo-bozza")) || "").includes("[da completare]"));
+        await pagina.locator(".posta-mail.urgente button", { hasText: "Metti nelle Bozze" }).click();
+        await pagina.waitForFunction(() => /Non l'ho inviata/.test(document.querySelector(".zona-bozza .esito")?.textContent || ""));
+        controlla("bozza nelle Bozze, non inviata", true);
+        const sbPosta = await pagina.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        controlla("posta aperta senza scorrimento orizzontale", sbPosta <= 0, `${sbPosta}px`);
+        await pagina.screenshot({ path: `${cartella}/posta-bozza-${nome}.png`, fullPage: true });
+        // Impostazioni: caselle, preset e calendario Apple
+        await pagina.evaluate(() => { location.hash = "impostazioni"; });
+        await pagina.waitForSelector("#listaCaselle li:not(.vuoto)");
+        controlla("caselle elencate senza password", (await pagina.locator("#listaCaselle li").count()) === 3 && !(await pagina.content()).includes("password-finta-1234"));
+        await pagina.click("[data-preset=pec]");
+        controlla("preset PEC: niente conferme automatiche", await pagina.locator("#rigaConfermeCasella").isHidden());
+        await pagina.click("[data-preset=altro]");
+        controlla("preset Altro: campi dei server", await pagina.locator("#casImapHost").isVisible());
+        controlla("conferme automatiche spente di serie", !(await pagina.isChecked("#impConferme")));
+        await pagina.locator("#formCasella").screenshot({ path: `${cartella}/caselle-altro-${nome}.png` });
         await pagina.evaluate(() => { location.hash = "home"; });
         await pagina.click("#apriMenu");
         await pagina.screenshot({ path: `${cartella}/menu-${nome}.png` });

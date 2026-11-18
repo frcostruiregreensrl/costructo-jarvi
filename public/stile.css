@@ -240,6 +240,59 @@ label.disattivato { color: var(--testo-2); }
 .passi { padding-left: 20px; display: grid; gap: 6px; }
 code { font-family: var(--mono); background: var(--sfondo-2); padding: 1px 5px; border-radius: 5px; }
 
+/* posta (Fase 2) */
+.riga-filtri { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; margin: 8px 0; }
+.riga-filtri label:not(.spunta) { min-width: 0; flex: 1 1 160px; }
+.posta-gruppi { display: grid; gap: 18px; margin-top: 8px; }
+.gruppo-posta h2 { font-size: 18px; margin: 0 0 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.gruppo-posta.lavoro h2 { color: var(--lavoro); }
+.gruppo-posta.privato h2 { color: var(--privato); }
+.conteggio-urgenti { font-size: 13px; color: #fff; background: var(--errore); border-radius: 999px; padding: 2px 10px; }
+:root[data-theme="dark"] .conteggio-urgenti { color: #2a0b08; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .conteggio-urgenti { color: #2a0b08; } }
+.lista-posta { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.posta-mail { background: var(--carta); border: 1px solid var(--bordo); border-left: 5px solid var(--bordo); border-radius: 12px; padding: 10px 12px; display: grid; gap: 4px; min-width: 0; }
+.gruppo-posta.lavoro .posta-mail { border-left-color: var(--lavoro); }
+.gruppo-posta.privato .posta-mail { border-left-color: var(--privato); }
+.posta-mail.urgente { border-color: var(--errore); border-left-color: var(--errore); background: color-mix(in srgb, var(--errore) 7%, var(--carta)); }
+.posta-mail.automatica { opacity: .85; }
+.posta-testa { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
+.posta-oggetto { overflow-wrap: anywhere; }
+.etichette { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.etichetta { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--bordo); color: var(--testo-2); }
+.etichetta.urgente { border-color: var(--errore); color: var(--errore); }
+.etichetta.pec { border-color: var(--petrolio); color: var(--petrolio); }
+.etichetta.soldi { border-color: var(--ambra); color: var(--ambra); }
+.posta-meta { color: var(--testo-2); font-size: 13px; overflow-wrap: anywhere; margin: 0; }
+.posta-riassunto, .posta-motivo { margin: 0; overflow-wrap: anywhere; }
+.posta-motivo { color: var(--errore); font-size: 14px; font-weight: 600; }
+.posta-mail > button { justify-self: start; margin-top: 4px; }
+.posta-dettaglio { display: grid; gap: 8px; border-top: 1px solid var(--bordo); padding-top: 10px; margin-top: 4px; min-width: 0; }
+.estratto { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--sfondo); border: 1px solid var(--bordo); border-radius: 10px; padding: 10px 12px; max-height: 320px; overflow: auto; font-size: 15px; }
+.allegati { margin: 0; padding-left: 20px; overflow-wrap: anywhere; }
+.nota-bozza { margin: 0; color: var(--ok); font-size: 14px; }
+.zona-bozza { display: grid; gap: 8px; }
+.zona-bozza label { font-weight: 600; overflow-wrap: anywhere; }
+.testo-bozza { width: 100%; font: inherit; border: 1px solid var(--bordo); border-radius: 10px; padding: 10px; background: var(--sfondo); color: var(--testo); resize: vertical; }
+.azioni-modulo { display: flex; flex-wrap: wrap; gap: 8px; }
+.preset { display: flex; flex-wrap: wrap; gap: 8px; }
+.preset button[aria-pressed="true"] { background: var(--petrolio); border-color: var(--petrolio); color: #fff; font-weight: 600; }
+:root[data-theme="dark"] .preset button[aria-pressed="true"] { color: #062126; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .preset button[aria-pressed="true"] { color: #062126; } }
+.sottomodulo { display: grid; gap: 12px; }
+#casServer { display: grid; gap: 12px; }
+#casServer[hidden] { display: none !important; }
+.lista-caselle li.privato { border-left-color: var(--privato); }
+.stato-casella { color: var(--testo-2); }
+.stato-casella.male { color: var(--errore); }
+.avviso-forte { margin: 0; font-size: 14px; color: var(--testo); background: var(--ambra-tenue); border: 1px solid var(--ambra); border-radius: 10px; padding: 10px 12px; }
+.lista-calendari { list-style: none; padding: 0; margin: 0 0 6px; display: grid; gap: 8px; }
+.lista-calendari li { display: grid; grid-template-columns: 1fr minmax(0, 220px); gap: 8px; align-items: center; background: var(--sfondo); border: 1px solid var(--bordo); border-radius: 10px; padding: 6px 10px; }
+.lista-calendari li.vuoto { display: block; color: var(--testo-2); }
+.lista-calendari label.spunta { overflow-wrap: anywhere; min-width: 0; }
+.pallino { width: 12px; height: 12px; border-radius: 50%; background: var(--bordo); flex: none; }
+@media (max-width: 480px) { .lista-calendari li { grid-template-columns: 1fr; } }
+
 @media (min-width: 900px) {
   #sfera { width: 220px; height: 220px; }
   main { padding-top: 20px; }

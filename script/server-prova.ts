@@ -18,6 +18,9 @@ import { salvaSegreto, salvaImpostazioni } from "../src/impostazioni.js";
 import { aggiungiAzienda } from "../src/aziende.js";
 import { registraConsumo } from "../src/consumi.js";
 import { dataIso } from "../src/tempo.js";
+import { aggiungiCasella } from "../src/posta/caselle.js";
+import type { ServiziApp } from "../src/app.js";
+import { ImapFinto, uscitaFinta } from "../test/postaFinta.js";
 
 const PASSWORD = "password-finta-di-prova";
 const SEGRETO = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
@@ -57,8 +60,8 @@ costructo.listen(0, "127.0.0.1");
 await new Promise((r) => costructo.once("listening", r));
 salvaSegreto(db, cifratore, "costructo_url", `http://127.0.0.1:${(costructo.address() as AddressInfo).port}`);
 const fonte = { db, cifratore, urlAmbiente: "", tokenAmbiente: "" };
-await aggiungiAzienda(fonte, { token: "csa_prova_interfaccia_123" });
-await aggiungiAzienda(fonte, { token: "csa_prova_seconda_456" });
+const prima = await aggiungiAzienda(fonte, { token: "csa_prova_interfaccia_123" });
+const seconda = await aggiungiAzienda(fonte, { token: "csa_prova_seconda_456" });
 
 // Dati finti
 const oggi = dataIso(Date.now(), "Europe/Rome");
@@ -74,14 +77,39 @@ salvaImpostazioni(db, { tettoMensileUsd: 5, comeChiamarmi: "Luigi" });
 
 const cervello = creaCervelloFinto((r) => {
   const ultimo = r.messaggi[r.messaggi.length - 1];
+  // Posta: riassunti (filtro) e bozze, sempre finti.
+  if (!r.strumenti.length && /BOZZA/.test(r.sistema)) return { testo: "Buongiorno,\n\nla ringrazio per il messaggio. Le confermo che passeremo in cantiere [da completare].\n\nCordiali saluti" };
+  if (!r.strumenti.length && ultimo.ruolo === "utente") {
+    const righe = ultimo.testo.split("\n");
+    const voci = JSON.parse(righe[righe.findIndex((x) => x.startsWith("<dati_non_attendibili")) + 1]) as Array<{ n: number; oggetto: string }>;
+    return { testo: JSON.stringify(voci.map((v) => ({ n: v.n, riassunto: `Riassunto finto: ${v.oggetto}`, urgente: /urgente|ferm/i.test(v.oggetto), motivo: /urgente|ferm/i.test(v.oggetto) ? "serve una risposta oggi (finto)" : "", tocca: /fattura/i.test(v.oggetto) }))) };
+  }
   if (ultimo.ruolo === "risultati") return { testo: "Ti chiedo conferma prima di farlo." };
   const t = ultimo.ruolo === "utente" ? ultimo.testo : "";
   if (/briefing alle/i.test(t)) return { chiamate: [{ id: "p1", nome: "ricordo_salva", input: { testo: "Luigi vuole il briefing alle 6:45", spazio: "privato" } }] };
   return { testo: "Oggi hai il sopralluogo a Villa Rosa alle undici, poi la palestra in serata. Il DURC scade tra pochi giorni: ti conviene rinnovarlo questa settimana." };
 });
 
+// Posta finta: tre caselle (due aziende e privato) con qualche mail. Nessun server vero.
+const imap = new ImapFinto();
+const caselleFinte = [
+  { utente: "lavoro@prova.example", nome: "Lavoro (finta)", tipo: "gmail" as const, spazio: prima.id },
+  { utente: "pec@prova.example", nome: "PEC (finta)", tipo: "pec" as const, spazio: seconda.id },
+  { utente: "casa@prova.example", nome: "Personale (finta)", tipo: "gmail" as const, spazio: "privato" },
+];
+for (const c of caselleFinte) imap.casella(c.utente, "password-finta-1234");
+
 const config = leggiConfig({ JARVIS_ORIGINE: "http://127.0.0.1:1" } as NodeJS.ProcessEnv);
-const app = creaApp({ config, db, cifratore, cervello: async () => cervello });
+const app = creaApp({ config, db, cifratore, cervello: async () => cervello, apriImap: imap.apri, uscita: uscitaFinta() });
+const servizi = app.locals.servizi as ServiziApp;
+for (const c of caselleFinte) await aggiungiCasella(servizi.posta.dip, { nome: c.nome, tipo: c.tipo, spazio: c.spazio, utente: c.utente, password: "password-finta-1234" });
+const ora = Date.now();
+imap.arriva("lavoro@prova.example", { oggetto: "Gru ferma in cantiere Villa Rosa (finto)", daNome: "Capocantiere Prova", da: "capo@prova.example", data: new Date(ora - 40 * 60_000), testo: "Buongiorno, la gru è ferma da stamattina: serve il tecnico entro oggi. (testo finto)" });
+imap.arriva("lavoro@prova.example", { oggetto: "Fattura n. 12 (finta)", daNome: "Fornitore Prova", da: "amministrazione@prova.example", data: new Date(ora - 3 * 3600_000), testo: "In allegato la fattura di ottobre. (testo finto)" });
+imap.arriva("lavoro@prova.example", { oggetto: "Novità del mese (finta)", da: "newsletter@prova.example", data: new Date(ora - 5 * 3600_000), intestazioni: { "List-Unsubscribe": "<mailto:x@prova.example>" } });
+imap.arriva("pec@prova.example", { oggetto: "Comunicazione di avvio lavori (finta)", daNome: "Comune di Prova", da: "protocollo@prova.example", data: new Date(ora - 26 * 3600_000), testo: "Si comunica... (testo finto)" });
+imap.arriva("casa@prova.example", { oggetto: "Cena di sabato (finta)", daNome: "Anna", da: "anna@prova.example", data: new Date(ora - 2 * 3600_000), testo: "Ci vediamo sabato alle 20? (testo finto)" });
+await servizi.posta.controllaOra();
 const server = app.listen(Number(process.env.PORTA_PROVA) || 0, "127.0.0.1");
 await new Promise((r) => server.once("listening", r));
 const porta = (server.address() as AddressInfo).port;
