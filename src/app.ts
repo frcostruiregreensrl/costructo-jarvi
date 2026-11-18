@@ -20,9 +20,9 @@ import { elencaMemorie, aggiungiMemoria, correggiMemoria, cancellaMemoria, espor
 import { impegniProssimiGiorni, aggiungiImpegno, cancellaImpegno, descriviImpegno } from "./agenda.js";
 import { elencaConversazioni, ultimiMessaggi } from "./conversazioni.js";
 import { riepilogoMese, LISTINO } from "./consumi.js";
-import { aziendeCollegate, aziendeVisibili, aggiungiAzienda, rimuoviAzienda, rinominaAzienda, salvaTokenPrincipale, provaAziende, urlCostructo, leggiAziende, ErroreAziende, type FonteAziende } from "./aziende.js";
+import { aziendeCollegate, aziendeVisibili, aggiungiAzienda, rimuoviAzienda, rinominaAzienda, salvaTokenPrincipale, controllaTokenPrincipale, provaAziende, urlCostructo, leggiAziende, ErroreAziende, type FonteAziende } from "./aziende.js";
 import { controllaIndirizzo } from "./calendario.js";
-import { creaBriefing } from "./briefing.js";
+import { creaBriefing, notificheDelMattino } from "./briefing.js";
 import { rispondi } from "./assistente.js";
 import { rispondiConferma } from "./strumenti.js";
 import { SchemaIscrizione, salvaIscrizione, togliIscrizione, inviaATutti, type Invia } from "./push.js";
@@ -311,23 +311,23 @@ export function creaApp(o: OpzioniApp) {
   app.put("/api/collegamenti", async (req, res) => {
     const d = SchemaCollegamenti.safeParse(req.body);
     if (!d.success) return res.status(400).json({ errore: "Dati non validi." });
+    // Prima si controlla tutto, poi si salva: un errore non lascia mai una modifica a metà.
     try {
-      if (d.data.costructoUrl !== undefined) {
-        const u = d.data.costructoUrl.trim().replace(/\/$/, "");
-        if (u) {
-          const p = new URL(u);
-          if (p.protocol !== "https:" && config.produzione) throw new Error("L'indirizzo di Costructo deve essere https.");
-          if (p.username || p.password) throw new Error("Indirizzo non valido.");
-        }
-        salvaSegreto(db, cifratore, "costructo_url", u);
+      const u = d.data.costructoUrl?.trim().replace(/\/$/, "");
+      if (u) {
+        let p: URL;
+        try { p = new URL(u); } catch { throw new Error("Indirizzo di Costructo non valido."); }
+        if (p.protocol !== "https:" && config.produzione) throw new Error("L'indirizzo di Costructo deve essere https.");
+        if (p.username || p.password) throw new Error("Indirizzo non valido.");
       }
-      // Vecchio campo «token unico»: vale solo se non ci sono già più aziende (poi si usa «Aggiungi»).
+      // Vecchio campo «token unico»: vale solo se non ci sono già aziende nell'elenco (poi si usa «Aggiungi»).
+      if (d.data.costructoToken !== undefined) controllaTokenPrincipale(fonte, d.data.costructoToken);
+      const l = d.data.calendarioIcal?.trim();
+      if (l) await controllaIndirizzo(l);
+
+      if (u !== undefined) salvaSegreto(db, cifratore, "costructo_url", u);
       if (d.data.costructoToken !== undefined) salvaTokenPrincipale(fonte, d.data.costructoToken);
-      if (d.data.calendarioIcal !== undefined) {
-        const l = d.data.calendarioIcal.trim();
-        if (l) await controllaIndirizzo(l);
-        salvaSegreto(db, cifratore, "calendario_ical", l);
-      }
+      if (l !== undefined) salvaSegreto(db, cifratore, "calendario_ical", l);
     } catch (e) {
       return res.status(400).json({ errore: (e as Error).message });
     }
@@ -337,7 +337,7 @@ export function creaApp(o: OpzioniApp) {
   // ------------------------------------------------------------ aziende di Costructo (un token per azienda)
   const erroreAziende = (res: Response, e: unknown) => {
     const err = e instanceof ErroreAziende ? e : new ErroreAziende("Operazione non riuscita.");
-    return res.status(err.stato).json({ errore: err.message });
+    return res.status(err.stato).json({ errore: err.message, ...(err.codice ? { codice: err.codice } : {}) });
   };
   app.get("/api/collegamenti/aziende", (_req, res) => { res.json(aziendeVisibili(fonte)); });
   app.post("/api/collegamenti/aziende", async (req, res) => {
@@ -396,7 +396,12 @@ export function creaApp(o: OpzioniApp) {
   app.post("/api/push/prova", async (_req, res) => {
     if (!o.invia) return res.json({ ok: false, messaggio: "Notifiche non configurate sul server (mancano le chiavi VAPID)." });
     const b = await prepara();
-    const n = await inviaATutti(db, o.invia, "Prova di Jarvis", b.righe.slice(1, 3).map((r) => r.testo).join(" "));
+    // Una sola notifica di prova; con più aziende dice quante ne arriveranno al mattino.
+    const mattino = notificheDelMattino(b);
+    const testo = mattino.length > 1
+      ? `Al mattino arriveranno ${mattino.length} notifiche, una per azienda${mattino.length > b.aziende.length ? " più una per la parte privata" : ""}. ${mattino[0].testo}`
+      : b.righe.slice(1, 3).map((r) => r.testo).join(" ");
+    const n = await inviaATutti(db, o.invia, "Prova di Jarvis", testo.slice(0, 200));
     res.json({ ok: n > 0, messaggio: n ? "Notifica inviata." : "Nessun dispositivo iscritto." });
   });
 

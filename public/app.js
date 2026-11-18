@@ -484,6 +484,21 @@ function disegnaAziende(aziende) {
     const li = crea("li");
     const nome = crea("span", "nome-azienda", a.nome);
     nome.append(crea("small", "", `token ${a.token}`));
+    const azioni = crea("span", "azioni-azienda");
+    const rinomina = crea("button", "secondario", "Rinomina");
+    rinomina.type = "button";
+    rinomina.setAttribute("aria-label", `Rinomina l'azienda ${a.nome}`);
+    rinomina.addEventListener("click", async () => {
+      const nuovo = prompt(`Nuovo nome per «${a.nome}»:`, a.nome);
+      if (nuovo === null || !nuovo.trim() || nuovo.trim() === a.nome) return;
+      const esito = $("#esitoCollegamenti");
+      try {
+        const c = await api(`/api/collegamenti/aziende/${encodeURIComponent(a.id)}`, { metodo: "PATCH", corpo: { nome: nuovo.trim() } });
+        disegnaAziende(c.aziende || []);
+        esito.className = "esito"; esito.textContent = `Nome cambiato: ${nuovo.trim()}.`;
+        caricaBriefing();
+      } catch (err) { esito.className = "esito male"; esito.textContent = err.message; }
+    });
     const togli = crea("button", "secondario", "Rimuovi");
     togli.type = "button";
     togli.setAttribute("aria-label", `Rimuovi l'azienda ${a.nome}`);
@@ -497,9 +512,13 @@ function disegnaAziende(aziende) {
         caricaBriefing();
       } catch (err) { esito.className = "esito male"; esito.textContent = err.message; }
     });
-    li.append(nome, togli);
+    azioni.append(rinomina, togli);
+    li.append(nome, azioni);
     lista.append(li);
   }
+}
+async function ricaricaAziende() {
+  try { disegnaAziende(await api("/api/collegamenti/aziende")); } catch { /* resta l'elenco di prima */ }
 }
 /** Salva l'indirizzo di Costructo se è cambiato (serve prima di aggiungere un token). */
 async function salvaUrlSeCambiato() {
@@ -508,21 +527,50 @@ async function salvaUrlSeCambiato() {
   const c = await api("/api/collegamenti", { metodo: "PUT", corpo: { costructoUrl: url } });
   stato.urlSalvato = c.costructoUrl || "";
 }
+/** Mostra o nasconde il campo per scegliere un altro nome (quando il nome letto da Costructo c'è già). */
+function campoNome(visibile) {
+  $("#rigaNomeAzienda").hidden = !visibile;
+  if (!visibile) $("#colNomeAzienda").value = "";
+}
+let aggiuntaInCorso = false;
 async function aggiungiAzienda() {
+  if (aggiuntaInCorso) return false; // niente doppio invio (pulsante o Invio)
   const esito = $("#esitoCollegamenti");
   const token = $("#colToken").value.trim();
   if (!token) { esito.className = "esito male"; esito.textContent = "Scrivi il token dell'azienda (inizia con csa_)."; $("#colToken").focus(); return false; }
+  const corpo = { token };
+  const nome = $("#rigaNomeAzienda").hidden ? "" : $("#colNomeAzienda").value.trim();
+  if (nome) corpo.nome = nome;
+  aggiuntaInCorso = true;
+  $("#aggiungiAzienda").disabled = true;
   esito.className = "esito"; esito.textContent = "Controllo il token con Costructo…";
   try {
     await salvaUrlSeCambiato();
-    const c = await api("/api/collegamenti/aziende", { metodo: "POST", corpo: { token } });
+    const r = await fetch("/api/collegamenti/aziende", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo) });
+    if (r.status === 401) throw new NonAutenticato();
+    const c = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      if (c.codice === "nome_esistente") {
+        campoNome(true);
+        $("#colNomeAzienda").focus();
+        throw new Error(`${c.errore} Poi premi di nuovo «Aggiungi».`);
+      }
+      throw new Error(c.errore || `Errore ${r.status}`);
+    }
     $("#colToken").value = "";
+    campoNome(false);
     disegnaAziende(c.aziende || []);
     const nuova = (c.aziende || []).at(-1);
     esito.className = "esito"; esito.textContent = nuova ? `Azienda collegata: ${nuova.nome}.` : "Azienda collegata.";
     caricaBriefing();
     return true;
-  } catch (err) { esito.className = "esito male"; esito.textContent = err.message; return false; }
+  } catch (err) {
+    if (err instanceof NonAutenticato) { mostraAccesso(); return false; }
+    esito.className = "esito male"; esito.textContent = err.message; return false;
+  } finally {
+    aggiuntaInCorso = false;
+    $("#aggiungiAzienda").disabled = false;
+  }
 }
 $("#aggiungiAzienda").addEventListener("click", () => { aggiungiAzienda(); });
 $("#formCollegamenti").addEventListener("submit", async (e) => {
@@ -549,6 +597,7 @@ $("#provaCostructo").addEventListener("click", async () => {
   esito.className = "esito"; esito.textContent = "Provo il collegamento…";
   const r = await api("/api/collegamenti/costructo/prova", { metodo: "POST", corpo: {} }).catch((e) => ({ ok: false, messaggio: e.message, aziende: [] }));
   const aziende = r.aziende || [];
+  ricaricaAziende(); // la prova può aver letto il nome vero dell'azienda
   if (aziende.length > 1) {
     for (const a of aziende) lista.append(crea("li", a.ok ? "" : "male", `${a.nome}: ${a.ok ? "collegamento riuscito" : a.messaggio}`));
     esito.className = r.ok ? "esito" : "esito male";

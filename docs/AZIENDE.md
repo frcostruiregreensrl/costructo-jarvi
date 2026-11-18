@@ -22,7 +22,11 @@ Impostazioni → «Collegamento a Costructo»:
    Se Costructo non accetta il token, Jarvis non lo salva e lo dice;
 3. ripeti per l'altra azienda (al massimo **5**);
 4. **Prova il collegamento** prova tutte le aziende e dà l'esito di ognuna;
-5. **Rimuovi** (con conferma) scollega un'azienda: il token viene cancellato da Jarvis, in Costructo resta.
+5. **Rinomina** cambia il nome mostrato; **Rimuovi** (con conferma) scollega un'azienda: il token viene cancellato
+   da Jarvis, in Costructo resta.
+
+Se il nome letto da Costructo c'è già, compare il campo «Nome da mostrare per questa azienda»: scrivi un altro nome
+e premi di nuovo «Aggiungi». Mentre Jarvis controlla il token, il pulsante «Aggiungi» resta bloccato.
 
 Jarvis rifiuta lo stesso token due volte e la stessa azienda due volte (stesso id di Costructo).
 
@@ -31,8 +35,8 @@ Jarvis rifiuta lo stesso token due volte e la stessa azienda due volte (stesso i
 Niente da fare: il vecchio token (salvato dalle Impostazioni o nella variabile `COSTRUCTO_TOKEN`) vale come
 **prima azienda** («Azienda principale» finché Jarvis non ne legge il nome con «Prova il collegamento»).
 Quando aggiungi la seconda azienda, il vecchio token entra nell'elenco con il suo nome e il vecchio segreto viene
-tolto. Se il token stava in `COSTRUCTO_TOKEN` e lo rimuovi dalle Impostazioni, non ricompare: puoi togliere
-anche la variabile dal server.
+tolto. Da quel momento conta solo l'elenco: anche togliendo tutte le aziende, né il vecchio token né quello di
+`COSTRUCTO_TOKEN` ricompaiono (puoi togliere anche la variabile dal server).
 
 ## Cosa cambia per Jarvis
 
@@ -43,6 +47,8 @@ anche la variabile dal server.
     «Di quale azienda parli: Edilgreen o Rossi Costruzioni?»;
   - se Luigi non dice l'azienda, Jarvis legge **tutte** le aziende e ogni dato porta il nome della sua azienda.
     Se un'azienda non risponde, i dati delle altre arrivano lo stesso, con l'errore di quella che manca.
+  - con una sola azienda, se Luigi nomina un'azienda che non c'è, Jarvis legge quella collegata e lo dice.
+  - i nomi delle aziende (e gli errori con il nome) arrivano all'AI sempre tra i delimitatori dei dati.
 - **Prompt**: Jarvis dice sempre di quale azienda è ogni informazione, non somma numeri di aziende diverse senza
   dirlo e, quando la richiesta non è chiara, chiede prima di agire (per pagamenti e fatture anche il documento).
   I nomi delle aziende arrivano nel messaggio del turno, **marcati come dati** (non nel prompt di sistema).
@@ -59,15 +65,17 @@ anche la variabile dal server.
 |---|---|
 | `GET /api/collegamenti/aziende` | elenco: `id`, `nome`, `token` **mascherato** |
 | `POST /api/collegamenti/aziende` `{token, nome?}` | aggiunge un'azienda (prima chiede `/io` a Costructo) |
-| `PATCH /api/collegamenti/aziende/:id` `{nome}` | cambia il nome mostrato |
+| `PATCH /api/collegamenti/aziende/:id` `{nome}` | cambia il nome mostrato (409 `codice: "nome_esistente"` se c'è già) |
 | `DELETE /api/collegamenti/aziende/:id` | scollega l'azienda |
 | `POST /api/collegamenti/costructo/prova` | prova tutte le aziende: `{ok, messaggio, aziende: [{id, nome, ok, messaggio}]}` |
-| `PUT /api/collegamenti` | indirizzo di Costructo e link iCal; il vecchio campo `costructoToken` vale solo finché non ci sono aziende nell'elenco |
+| `PUT /api/collegamenti` | indirizzo di Costructo e link iCal; il vecchio campo `costructoToken` vale solo finché non ci sono aziende nell'elenco. Prima controlla tutto, poi salva: un errore non lascia modifiche a metà |
 
 `GET /api/impostazioni` restituisce in `collegamenti.aziende` lo stesso elenco mascherato.
 
 ## Dati salvati
 
 Segreto cifrato `costructo_aziende` (AES-256-GCM con `JARVIS_CHIAVE_CIFRATURA`): elenco JSON di
-`{ id, nome, token, aziendaId }`. I token non tornano mai al browser e non finiscono nel registro.
+`{ id, nome, token, aziendaId }` (id di Costructo al massimo 80 caratteri). Una voce rovinata viene scartata da
+sola (le altre restano) e il registro lo segnala, senza token. Le aggiunte in parallelo non si perdono: l'elenco
+si rilegge subito prima di scrivere. I token non tornano mai al browser e non finiscono nel registro.
 Codice: `src/aziende.ts`. Test: `test/aziende.test.ts`.

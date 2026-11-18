@@ -195,6 +195,7 @@ body.ascolta .stato-voce { color: var(--ambra); }
 .lista-aziende li.vuoto { border-left-color: var(--bordo); color: var(--testo-2); }
 .lista-aziende .nome-azienda { font-weight: 600; overflow-wrap: anywhere; }
 .lista-aziende small { color: var(--testo-2); margin-left: 6px; font-variant-numeric: tabular-nums; }
+.lista-aziende .azioni-azienda { display: flex; gap: 6px; flex-wrap: wrap; }
 .lista-esiti li { color: var(--ok); }
 .lista-esiti li.male { color: var(--errore); }
 .riga-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin: 8px 0 12px; }

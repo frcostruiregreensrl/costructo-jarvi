@@ -8,6 +8,7 @@ import type { Db } from "./db.js";
 import type { Cifratore } from "./sicurezza/cifra.js";
 import { creaClientCostructo, ErroreCostructo, type ClientCostructo } from "./costructo.js";
 import { leggiSegreto, salvaSegreto, leggiValore, scriviValore, maschera } from "./impostazioni.js";
+import { registra } from "./registro.js";
 
 export const MAX_AZIENDE = 5;
 /** Id dell'azienda che arriva dal vecchio token unico. */
@@ -28,7 +29,7 @@ export interface AziendaCollegata { id: string; nome: string; client: ClientCost
 export interface AziendaVisibile { id: string; nome: string; token: string }
 
 export class ErroreAziende extends Error {
-  constructor(messaggio: string, readonly stato = 400) { super(messaggio); }
+  constructor(messaggio: string, readonly stato = 400, readonly codice?: "nome_esistente") { super(messaggio); }
 }
 
 export interface FonteAziende {
@@ -38,6 +39,13 @@ export interface FonteAziende {
   urlAmbiente: string;
   tokenAmbiente: string;
   fetchFn?: typeof fetch;
+}
+
+/** Id dell'azienda in Costructo: testo breve (al massimo 80 caratteri), senza caratteri di controllo. */
+export function pulisciIdCostructo(id: unknown): string | undefined {
+  if (id === undefined || id === null) return undefined;
+  const t = String(id).replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 80);
+  return t || undefined;
 }
 
 /** Nome pulito: niente caratteri di controllo né < >, al massimo 60 caratteri. */
@@ -51,7 +59,6 @@ const SchemaSalvata = z.object({
   token: z.string().regex(FORMATO_TOKEN),
   aziendaId: z.string().max(80).optional(),
 });
-const SchemaElenco = z.array(SchemaSalvata).max(MAX_AZIENDE);
 
 const SchemaIo = z.object({
   azienda: z.object({
@@ -62,14 +69,38 @@ const SchemaIo = z.object({
 
 // ---------------------------------------------------------------- lettura e scrittura
 
-/** Elenco salvato (senza il vecchio token unico). */
+/** Problemi di lettura già scritti nel registro (per non ripeterli a ogni richiesta). */
+const segnalati = new WeakMap<Db, Set<string>>();
+function segnalaUnaVolta(db: Db, chiave: string, dettagli: Record<string, unknown>): void {
+  const visti = segnalati.get(db) ?? new Set<string>();
+  segnalati.set(db, visti);
+  if (visti.has(chiave)) return;
+  visti.add(chiave);
+  registra(db, "collegamenti.lettura", "errore", "sistema", dettagli);
+}
+
+/**
+ * Elenco salvato (senza il vecchio token unico). Una voce rovinata non fa sparire le altre:
+ * si scarta solo quella e lo si scrive nel registro (senza token).
+ */
 function elencoSalvato(f: FonteAziende): AziendaSalvata[] {
   const grezzo = leggiSegreto(f.db, f.cifratore, "costructo_aziende");
   if (!grezzo) return [];
-  try {
-    const ok = SchemaElenco.safeParse(JSON.parse(grezzo));
-    return ok.success ? ok.data : [];
-  } catch { return []; }
+  let voci: unknown;
+  try { voci = JSON.parse(grezzo); } catch { voci = null; }
+  if (!Array.isArray(voci)) {
+    segnalaUnaVolta(f.db, `illeggibile:${grezzo.length}`, { motivo: "elenco delle aziende illeggibile" });
+    return [];
+  }
+  const buone: AziendaSalvata[] = [];
+  let scartate = 0;
+  for (const v of voci) {
+    const ok = SchemaSalvata.safeParse(v);
+    if (ok.success && buone.length < MAX_AZIENDE && !buone.some((b) => b.id === ok.data.id || b.token === ok.data.token)) buone.push(ok.data);
+    else scartate++;
+  }
+  if (scartate) segnalaUnaVolta(f.db, `scartate:${scartate}:${grezzo.length}`, { motivo: "voci dell'elenco aziende non valide, scartate", scartate, tenute: buone.length });
+  return buone;
 }
 function salvaElenco(f: FonteAziende, elenco: AziendaSalvata[]): void {
   salvaSegreto(f.db, f.cifratore, "costructo_aziende", elenco.length ? JSON.stringify(elenco) : "");
@@ -119,7 +150,7 @@ async function chiediIo(url: string, token: string, fetchFn?: typeof fetch): Pro
     const r = await creaClientCostructo({ url, token, fetchFn }).io();
     const io = SchemaIo.safeParse(r.dati);
     const az = io.success ? io.data.azienda : undefined;
-    return { nome: pulisciNome(az?.nome) || undefined, aziendaId: az?.id };
+    return { nome: pulisciNome(az?.nome) || undefined, aziendaId: pulisciIdCostructo(az?.id) };
   } catch (e) {
     const motivo = e instanceof ErroreCostructo ? e.message : "errore sconosciuto";
     throw new ErroreAziende(`Costructo non ha accettato questo token: ${motivo}`);
@@ -139,11 +170,29 @@ async function elencoConPrincipale(f: FonteAziende, url: string): Promise<Aziend
   }
   return [{ id: ID_PRINCIPALE, nome: nome || NOME_PRINCIPALE, token: p.token, ...(aziendaId ? { aziendaId } : {}) }];
 }
-/** Dopo aver spostato il vecchio token nell'elenco, il vecchio segreto non serve più. */
+/**
+ * Salva l'elenco. Da qui in poi l'elenco è l'unica fonte: il vecchio segreto si cancella, il token delle
+ * variabili del server (COSTRUCTO_TOKEN) non vale più e il nome ricordato per il vecchio token si azzera.
+ * Così, togliendo tutte le aziende, nessun token vecchio può ricomparire (nemmeno con il nome di un'altra).
+ */
 function chiudiPrincipale(f: FonteAziende, elenco: AziendaSalvata[]): void {
   salvaElenco(f, elenco);
   salvaSegreto(f.db, f.cifratore, "costructo_token", "");
-  if (f.tokenAmbiente && elenco.some((a) => a.token === f.tokenAmbiente)) scriviValore(f.db, "costructoAmbienteTolto", true);
+  if (f.tokenAmbiente) scriviValore(f.db, "costructoAmbienteTolto", true);
+  scriviValore(f.db, "aziendaPrincipale", {});
+}
+
+/**
+ * Modifica sicura anche con richieste in parallelo: si rilegge l'elenco subito prima di scrivere,
+ * senza attese in mezzo (better-sqlite3 è sincrono). `provvisorio` vale solo se nel frattempo
+ * l'elenco salvato è ancora vuoto (cioè c'era solo il vecchio token).
+ */
+function modificaElenco<T>(f: FonteAziende, provvisorio: AziendaSalvata[], modifica: (elenco: AziendaSalvata[]) => { elenco: AziendaSalvata[]; esito: T }): T {
+  const salvato = elencoSalvato(f);
+  const base = (salvato.length ? salvato : provvisorio).map((a) => ({ ...a }));
+  const r = modifica(base);
+  chiudiPrincipale(f, r.elenco);
+  return r.esito;
 }
 
 // ---------------------------------------------------------------- modifiche (da Impostazioni)
@@ -153,48 +202,60 @@ export async function aggiungiAzienda(f: FonteAziende, dati: { token: string; no
   if (!FORMATO_TOKEN.test(token)) throw new ErroreAziende("Il token di Costructo deve iniziare con csa_.");
   const url = urlCostructo(f);
   if (!url) throw new ErroreAziende("Prima salva l'indirizzo di Costructo.");
-  const elenco = await elencoConPrincipale(f, url);
-  if (elenco.some((a) => a.token === token)) throw new ErroreAziende("Questo token è già collegato.");
-  if (elenco.length >= MAX_AZIENDE) throw new ErroreAziende(`Puoi collegare al massimo ${MAX_AZIENDE} aziende.`);
-  const io = await chiediIo(url, token, f.fetchFn);
-  if (io.aziendaId) {
-    const doppia = elenco.find((a) => a.aziendaId === io.aziendaId);
+  const controlla = (elenco: AziendaSalvata[], io?: InfoPrincipale, nome?: string) => {
+    if (elenco.some((a) => a.token === token)) throw new ErroreAziende("Questo token è già collegato.");
+    if (elenco.length >= MAX_AZIENDE) throw new ErroreAziende(`Puoi collegare al massimo ${MAX_AZIENDE} aziende.`);
+    const doppia = io?.aziendaId ? elenco.find((a) => a.aziendaId === io.aziendaId) : undefined;
     if (doppia) throw new ErroreAziende(`Questa azienda è già collegata (${doppia.nome}).`);
-  }
-  const nome = pulisciNome(dati.nome) || io.nome || `Azienda ${elenco.length + 1}`;
-  if (elenco.some((a) => a.nome.toLowerCase() === nome.toLowerCase())) throw new ErroreAziende(`C'è già un'azienda che si chiama «${nome}»: scegli un altro nome.`);
-  const nuova: AziendaSalvata = { id: `a${randomBytes(4).toString("hex")}`, nome, token, ...(io.aziendaId ? { aziendaId: io.aziendaId } : {}) };
-  chiudiPrincipale(f, [...elenco, nuova]);
-  return nuova;
+    if (nome && elenco.some((a) => a.nome.toLowerCase() === nome.toLowerCase())) {
+      throw new ErroreAziende(`C'è già un'azienda che si chiama «${nome}»: scrivi un altro nome.`, 409, "nome_esistente");
+    }
+  };
+  const provvisorio = await elencoConPrincipale(f, url);
+  controlla(provvisorio);
+  const io = await chiediIo(url, token, f.fetchFn);
+  // Da qui niente attese: si rilegge l'elenco e si scrive (un'altra aggiunta in parallelo non va persa).
+  return modificaElenco(f, provvisorio, (elenco) => {
+    const nome = pulisciNome(dati.nome) || io.nome || `Azienda ${elenco.length + 1}`;
+    controlla(elenco, io, nome);
+    const nuova: AziendaSalvata = { id: `a${randomBytes(4).toString("hex")}`, nome, token, ...(io.aziendaId ? { aziendaId: io.aziendaId } : {}) };
+    return { elenco: [...elenco, nuova], esito: nuova };
+  });
 }
 
 export async function rimuoviAzienda(f: FonteAziende, id: string): Promise<AziendaSalvata> {
-  const elenco = await elencoConPrincipale(f, urlCostructo(f));
-  const tolta = elenco.find((a) => a.id === id);
-  if (!tolta) throw new ErroreAziende("Azienda non trovata.", 404);
-  const resto = elenco.filter((a) => a.id !== id);
-  chiudiPrincipale(f, resto);
-  if (tolta.token === f.tokenAmbiente) scriviValore(f.db, "costructoAmbienteTolto", true);
-  return tolta;
+  const provvisorio = await elencoConPrincipale(f, urlCostructo(f));
+  return modificaElenco(f, provvisorio, (elenco) => {
+    const tolta = elenco.find((a) => a.id === id);
+    if (!tolta) throw new ErroreAziende("Azienda non trovata.", 404);
+    return { elenco: elenco.filter((a) => a.id !== id), esito: tolta };
+  });
 }
 
 export async function rinominaAzienda(f: FonteAziende, id: string, nome: string): Promise<AziendaSalvata> {
   const n = pulisciNome(nome);
   if (!n) throw new ErroreAziende("Scrivi un nome.");
-  const elenco = await elencoConPrincipale(f, urlCostructo(f));
-  const a = elenco.find((x) => x.id === id);
-  if (!a) throw new ErroreAziende("Azienda non trovata.", 404);
-  if (elenco.some((x) => x.id !== id && x.nome.toLowerCase() === n.toLowerCase())) throw new ErroreAziende(`C'è già un'azienda che si chiama «${n}».`);
-  a.nome = n;
-  chiudiPrincipale(f, elenco);
-  return a;
+  const provvisorio = await elencoConPrincipale(f, urlCostructo(f));
+  return modificaElenco(f, provvisorio, (elenco) => {
+    const a = elenco.find((x) => x.id === id);
+    if (!a) throw new ErroreAziende("Azienda non trovata.", 404);
+    if (elenco.some((x) => x.id !== id && x.nome.toLowerCase() === n.toLowerCase())) throw new ErroreAziende(`C'è già un'azienda che si chiama «${n}».`, 409, "nome_esistente");
+    a.nome = n;
+    return { elenco, esito: a };
+  });
 }
 
-/** Il vecchio campo «token» unico (PUT /api/collegamenti): vale solo finché non ci sono più aziende nell'elenco. */
-export function salvaTokenPrincipale(f: FonteAziende, token: string): void {
+/** Controllo del vecchio campo «token» unico, da fare PRIMA di salvare qualunque cosa. */
+export function controllaTokenPrincipale(f: FonteAziende, token: string): void {
   if (elencoSalvato(f).length) throw new ErroreAziende("Ci sono già aziende collegate: usa «Aggiungi» o «Rimuovi».");
   const t = token.trim();
   if (t && !FORMATO_TOKEN.test(t)) throw new ErroreAziende("Il token di Costructo deve iniziare con csa_.");
+}
+
+/** Il vecchio campo «token» unico (PUT /api/collegamenti): vale solo finché non ci sono aziende nell'elenco. */
+export function salvaTokenPrincipale(f: FonteAziende, token: string): void {
+  controllaTokenPrincipale(f, token);
+  const t = token.trim();
   salvaSegreto(f.db, f.cifratore, "costructo_token", t);
   scriviValore(f.db, "aziendaPrincipale", {});
   if (t) scriviValore(f.db, "costructoAmbienteTolto", false);

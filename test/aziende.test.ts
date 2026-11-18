@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { avviaAmbiente, dbProvvisorio, cifratore, leggiEventi } from "./aiuto.js";
 import { avviaCostructoFinto, TOKEN, TOKEN_2 } from "./costructoFinto.js";
 import { creaClientCostructo } from "../src/costructo.js";
-import { leggiAziende, aziendeCollegate, aggiungiAzienda, rimuoviAzienda, trovaAziende, ID_PRINCIPALE, type FonteAziende, type AziendaCollegata } from "../src/aziende.js";
+import { leggiAziende, aziendeCollegate, aggiungiAzienda, rimuoviAzienda, provaAziende, trovaAziende, ID_PRINCIPALE, type FonteAziende, type AziendaCollegata } from "../src/aziende.js";
 import { salvaSegreto, leggiSegreto, salvaImpostazioni } from "../src/impostazioni.js";
 import { eseguiStrumento, type ContestoStrumenti } from "../src/strumenti.js";
 import { creaBriefing, notificheDelMattino, testoNotifica } from "../src/briefing.js";
@@ -21,7 +21,12 @@ const due = (url: string): AziendaCollegata[] => [
 const contesto = (db: ContestoStrumenti["db"], aziende: AziendaCollegata[]): ContestoStrumenti => ({
   db, fuso: "Europe/Rome", vista: "lavoro", messaggioLuigi: "cantieri?", conversazione: "c", aziende, linkCalendario: () => "", emetti: () => {},
 });
-const leggiJson = (contenuto: string) => JSON.parse(contenuto.split("\n")[1].replace(/\\u003c/g, "<").replace(/\\u003e/g, ">"));
+/** Il JSON dentro il primo blocco <dati_non_attendibili> del testo. */
+const leggiJson = (contenuto: string) => {
+  const righe = contenuto.split("\n");
+  const i = righe.findIndex((r) => r.startsWith("<dati_non_attendibili"));
+  return JSON.parse(righe[i + 1].replace(/\\u003c/g, "<").replace(/\\u003e/g, ">"));
+};
 
 // ------------------------------------------------------------------ elenco, migrazione, aggiunte e rimozioni
 
@@ -51,6 +56,69 @@ test("aziende: il vecchio token unico diventa la prima azienda senza perderlo (s
       assert.deepEqual(leggiAziende(amb), [], "tolto: il token del server non ricompare");
     } finally { chiudi2(); }
   } finally { chiudi(); await f.chiudi(); }
+});
+
+test("aziende: con segreto vecchio ≠ COSTRUCTO_TOKEN, togliendo le aziende il token del server non ricompare", async () => {
+  const f = await avviaCostructoFinto();
+  try {
+    // 1) si toglie la sola azienda «principale» dopo «Prova il collegamento»
+    {
+      const { db, chiudi } = dbProvvisorio();
+      try {
+        const fonte: FonteAziende = { db, cifratore, urlAmbiente: f.url, tokenAmbiente: "csa_ambiente_vecchio_999" };
+        salvaSegreto(db, cifratore, "costructo_token", TOKEN);
+        await provaAziende(fonte);
+        assert.deepEqual(leggiAziende(fonte).map((a) => [a.nome, a.token]), [["Edilgreen", TOKEN]]);
+        await rimuoviAzienda(fonte, ID_PRINCIPALE);
+        assert.deepEqual(leggiAziende(fonte), []);
+      } finally { chiudi(); }
+    }
+    // 2) si aggiunge la seconda e poi si tolgono tutte e due
+    {
+      const { db, chiudi } = dbProvvisorio();
+      try {
+        const fonte: FonteAziende = { db, cifratore, urlAmbiente: f.url, tokenAmbiente: "csa_ambiente_vecchio_999" };
+        salvaSegreto(db, cifratore, "costructo_token", TOKEN);
+        await aggiungiAzienda(fonte, { token: TOKEN_2 });
+        for (const a of leggiAziende(fonte)) await rimuoviAzienda(fonte, a.id);
+        assert.deepEqual(leggiAziende(fonte), []);
+      } finally { chiudi(); }
+    }
+  } finally { await f.chiudi(); }
+});
+
+test("aziende: una voce rovinata non fa sparire le altre; l'id di Costructo troppo lungo viene accorciato", async () => {
+  const { db, chiudi } = dbProvvisorio();
+  try {
+    const fetchFn = (async () => Response.json({ azienda: { id: "x".repeat(500), nome: "Id lunghissimo" } })) as unknown as typeof fetch;
+    const fonte: FonteAziende = { db, cifratore, urlAmbiente: "http://costructo.invalid", tokenAmbiente: "", fetchFn };
+    const a = await aggiungiAzienda(fonte, { token: "csa_token_id_lungo_1" });
+    assert.equal(a.aziendaId?.length, 80);
+    assert.deepEqual(leggiAziende(fonte).map((x) => x.nome), ["Id lunghissimo"], "l'elenco salvato resta valido");
+    // voce rovinata scritta a mano: si scarta solo quella, e il registro lo dice (senza token)
+    const elenco = [...leggiAziende(fonte), { id: "rotta", nome: "", token: "csa_rotto_xxxxxxxx", aziendaId: "y".repeat(300) }];
+    salvaSegreto(db, cifratore, "costructo_aziende", JSON.stringify(elenco));
+    assert.deepEqual(leggiAziende(fonte).map((x) => x.nome), ["Id lunghissimo"]);
+    leggiAziende(fonte);
+    const reg = db.prepare("SELECT dettagli FROM registro WHERE azione = 'collegamenti.lettura'").all() as Array<{ dettagli: string }>;
+    assert.equal(reg.length, 1, "segnalato una volta sola");
+    assert.match(reg[0].dettagli, /"scartate":1/);
+    assert.ok(!reg[0].dettagli.includes("csa_"));
+  } finally { chiudi(); }
+});
+
+test("aziende: due aggiunte in parallelo non si perdono", async () => {
+  const { db, chiudi } = dbProvvisorio();
+  try {
+    const fetchFn = (async (_u: URL | string, init?: RequestInit) => {
+      const t = String(new Headers(init?.headers).get("authorization")).slice(-1);
+      await new Promise((r) => setTimeout(r, t === "1" ? 60 : 10));
+      return Response.json({ azienda: { id: `z${t}`, nome: `Impresa ${t}` } });
+    }) as unknown as typeof fetch;
+    const fonte: FonteAziende = { db, cifratore, urlAmbiente: "http://costructo.invalid", tokenAmbiente: "", fetchFn };
+    await Promise.all([1, 2, 3].map((i) => aggiungiAzienda(fonte, { token: `csa_parallelo_numero_${i}` })));
+    assert.deepEqual(leggiAziende(fonte).map((a) => a.nome).sort(), ["Impresa 1", "Impresa 2", "Impresa 3"]);
+  } finally { chiudi(); }
 });
 
 test("aziende via API: aggiungi, doppioni rifiutati, token non accettato, rinomina, rimuovi", async () => {
@@ -95,10 +163,14 @@ test("aziende via API: aggiungi, doppioni rifiutati, token non accettato, rinomi
 
     r = await a.chiama(`/api/collegamenti/aziende/${idRossi}`, { method: "PATCH", json: { nome: "Rossi" } });
     assert.equal((await r.json()).aziende[1].nome, "Rossi");
+    r = await a.chiama(`/api/collegamenti/aziende/${idRossi}`, { method: "PATCH", json: { nome: "edilgreen" } });
+    assert.equal(r.status, 409);
+    assert.equal((await r.json()).codice, "nome_esistente", "l'interfaccia fa scrivere un altro nome");
 
-    // il vecchio campo «token unico» non può sovrascrivere l'elenco
-    r = await a.chiama("/api/collegamenti", { method: "PUT", json: { costructoToken: TOKEN } });
+    // il vecchio campo «token unico» non può sovrascrivere l'elenco, e l'errore non lascia modifiche a metà
+    r = await a.chiama("/api/collegamenti", { method: "PUT", json: { costructoUrl: "https://altro.example", costructoToken: TOKEN } });
     assert.equal(r.status, 400);
+    assert.equal((await (await a.chiama("/api/impostazioni")).json()).collegamenti.costructoUrl, f.url, "l'indirizzo non è cambiato");
 
     r = await a.chiama(`/api/collegamenti/aziende/${idRossi}`, { method: "DELETE" });
     assert.deepEqual((await r.json()).aziende.map((x: { nome: string }) => x.nome), ["Edilgreen"]);
@@ -168,18 +240,22 @@ test("aziende: «Prova il collegamento» dà l'esito di ogni azienda", async () 
 
 // ------------------------------------------------------------------ strumenti dell'AI
 
-test("strumenti: con una sola azienda si usa quella, anche se l'AI scrive un altro nome", async () => {
+test("strumenti: con una sola azienda si usa quella; se l'AI scrive un altro nome, una nota lo dice", async () => {
   const f = await avviaCostructoFinto();
   const { db, chiudi } = dbProvvisorio();
   try {
     f.risposte["/cantieri"] = { corpo: [{ nome: "Villa Verdi" }] };
     const sola = due(f.url).slice(0, 1);
-    for (const azienda of [undefined, "", "Bianchi"]) {
+    for (const azienda of [undefined, "", "edilgreen", "Bianchi"]) {
       const r = await eseguiStrumento("costructo_cantieri", azienda === undefined ? {} : { azienda }, contesto(db, sola));
       assert.equal(r.errore, false);
       const d = leggiJson(r.contenuto);
       assert.equal(d.azienda, "Edilgreen");
       assert.equal(d.dati[0].nome, "Villa Verdi");
+      if (azienda === "Bianchi") {
+        assert.equal(d.nota, "Nessuna azienda collegata si chiama «Bianchi»; questi dati sono di Edilgreen.");
+        assert.ok(!r.contenuto.split("<dati_non_attendibili")[0].includes("Edilgreen"), "il nome dell'azienda sta solo dentro i dati");
+      } else assert.equal(d.nota, undefined);
     }
   } finally { chiudi(); await f.chiudi(); }
 });
@@ -201,8 +277,9 @@ test("strumenti: due aziende senza nome → legge tutte, ogni dato con la sua az
     assert.equal(leggiJson(soloRossi.contenuto).azienda, "Rossi Costruzioni");
     assert.deepEqual(f.richieste.map((x) => x.auth), [`Bearer ${TOKEN_2}`], "letta solo l'azienda nominata");
     const perId = await eseguiStrumento("costructo_agenda", { giorni: 2, azienda: "a1" }, contesto(db, due(f.url)));
-    assert.equal(perId.errore, true, "agenda non presente nel finto: errore, ma con il nome dell'azienda");
-    assert.match(perId.contenuto, /Edilgreen: Questa funzione non c'è ancora/);
+    assert.equal(perId.errore, true, "agenda non presente nel finto: errore, con il nome dell'azienda dentro i dati");
+    assert.deepEqual(leggiJson(perId.contenuto), { azienda: "Edilgreen", errore: "Questa funzione non c'è ancora in Costructo." });
+    assert.ok(!perId.contenuto.split("<dati_non_attendibili")[0].includes("Edilgreen"));
   } finally { chiudi(); await f.chiudi(); }
 });
 
@@ -213,6 +290,8 @@ test("strumenti: azienda sconosciuta o ambigua → niente lettura, l'AI deve chi
     const r = await eseguiStrumento("costructo_scadenze", { azienda: "Bianchi" }, contesto(db, due(f.url)));
     assert.equal(r.errore, false);
     assert.match(r.contenuto, /Di quale azienda parli: Edilgreen o Rossi Costruzioni\?/);
+    assert.deepEqual(leggiJson(r.contenuto).aziendeCollegate, ["Edilgreen", "Rossi Costruzioni"]);
+    assert.ok(!r.contenuto.split("<dati_non_attendibili")[0].match(/Edilgreen|Bianchi/), "nomi solo dentro i dati");
     const amb = [...due(f.url), { id: "a3", nome: "Rossi Impianti", client: creaClientCostructo({ url: f.url, token: TOKEN }) }];
     const r2 = await eseguiStrumento("costructo_cerca", { testo: "fattura 12", azienda: "Rossi" }, contesto(db, amb));
     assert.match(r2.contenuto, /più di un'azienda[\s\S]*Di quale azienda parli: Edilgreen, Rossi Costruzioni o Rossi Impianti\?/);
@@ -236,7 +315,10 @@ test("strumenti: l'errore di un'azienda non nasconde i dati dell'altra", async (
     f.risposte["/scadenze"] = { stato: 401 };
     const tutte = await eseguiStrumento("costructo_scadenze", {}, contesto(db, due(f.url)));
     assert.equal(tutte.errore, true);
-    assert.match(tutte.contenuto, /Edilgreen: .*token.* Rossi Costruzioni: .*500/);
+    const errori = leggiJson(tutte.contenuto).aziende;
+    assert.equal(errori[0].azienda, "Edilgreen");
+    assert.match(errori[0].errore, /token/);
+    assert.match(errori[1].errore, /500/);
   } finally { chiudi(); await f.chiudi(); }
 });
 
