@@ -23,6 +23,8 @@ export interface Config {
   vapidPubblica: string;
   vapidPrivata: string;
   vapidContatto: string;
+  /** JARVIS_CODICE_PRIMO_ACCESSO: codice monouso per creare l'utente dal browser quando il database è vuoto (es. su Railway). */
+  codicePrimoAccesso: string;
 }
 
 export function leggiConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -50,5 +52,6 @@ export function leggiConfig(env: NodeJS.ProcessEnv = process.env): Config {
     vapidPubblica: env.VAPID_PUBLIC_KEY || "",
     vapidPrivata: env.VAPID_PRIVATE_KEY || "",
     vapidContatto: env.VAPID_CONTATTO || "mailto:assistenza@example.invalid",
+    codicePrimoAccesso: env.JARVIS_CODICE_PRIMO_ACCESSO || "",
   };
 }

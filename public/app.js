@@ -61,7 +61,7 @@ applicaTema(leggiLocale("tema", "automatico"));
 async function avvia() {
   let s;
   try { s = await api("/api/stato"); } catch { s = { accesso: false }; }
-  if (!s.accesso) return mostraAccesso();
+  if (!s.accesso) return s.primoAccesso ? mostraPrimo() : mostraAccesso();
   try {
     const a = await api("/api/avvio");
     stato.impostazioni = a.impostazioni;
@@ -82,8 +82,36 @@ async function avvia() {
 function mostraAccesso() {
   $("#app").hidden = true;
   $("#accesso").hidden = false;
+  $("#formPrimo").hidden = true;
+  $("#formAccesso").hidden = false;
   $("#password").focus();
 }
+function mostraPrimo() {
+  $("#app").hidden = true;
+  $("#accesso").hidden = false;
+  $("#formAccesso").hidden = true;
+  $("#formPrimo").hidden = false;
+  $("#primoCodice").focus();
+}
+$("#formPrimo").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("#errorePrimo").textContent = "";
+  const bottone = $("#formPrimo button[type=submit]");
+  bottone.disabled = true;
+  try {
+    const r = await api("/api/primo-accesso", { metodo: "POST", corpo: {
+      codice: $("#primoCodice").value, nome: $("#primoNome").value.trim(), password: $("#primoPassword").value } });
+    $("#primoCodice").value = $("#primoPassword").value = "";
+    $("#primoSegreto").textContent = r.segreto;
+    $("#primoLink").href = r.link;
+    $("#primoFatto").hidden = false;
+    bottone.hidden = true;
+  } catch (err) {
+    $("#errorePrimo").textContent = err.message;
+    bottone.disabled = false;
+  }
+});
+$("#primoVaiAccesso").addEventListener("click", () => mostraAccesso());
 $("#formAccesso").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("#erroreAccesso").textContent = "";

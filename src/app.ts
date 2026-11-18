@@ -1,6 +1,6 @@
 // Server web di Jarvis (Express 5): sicurezza, accesso, API e file dell'interfaccia.
 import express, { type Request, type Response, type NextFunction } from "express";
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,8 @@ import type { Cervello } from "./cervello/tipi.js";
 import { caricaCervelloAnthropic } from "./cervello/carica.js";
 import { creaSessione, sessioneValida, chiudiSessione, nomeCookie, intestazioneCookie, leggiCookie, DURATA_SESSIONE_MS } from "./sicurezza/sessioni.js";
 import { bloccatoPer, registraErrore, azzera, ritardoAccesso, REGOLA_ACCESSO_IP, REGOLA_ACCESSO_GLOBALE, CHIAVE_GLOBALE } from "./sicurezza/limiti.js";
-import { utenteEsiste, verificaAccesso, nomeUtente } from "./sicurezza/utente.js";
+import { utenteEsiste, verificaAccesso, nomeUtente, creaUtente } from "./sicurezza/utente.js";
+import { uriOtpauth } from "./sicurezza/totp.js";
 import { registra, leggiRegistro, dimenticaNelRegistro } from "./registro.js";
 import { leggiImpostazioni, salvaImpostazioni, salvaSegreto, leggiSegreto, maschera } from "./impostazioni.js";
 import { elencaMemorie, aggiungiMemoria, correggiMemoria, cancellaMemoria, esportaMemorie } from "./memorie.js";
@@ -98,8 +99,35 @@ export function creaApp(o: OpzioniApp) {
   const autenticato = (req: Request) => sessioneValida(db, leggiCookie(req.headers.cookie, cookie));
   const ip = (req: Request) => req.ip || req.socket.remoteAddress || "?";
 
+  const primoAccessoAperto = () => !!config.codicePrimoAccesso && !utenteEsiste(db);
   app.get("/api/stato", (req, res) => {
-    res.json({ accesso: autenticato(req), utentePresente: utenteEsiste(db) });
+    res.json({ accesso: autenticato(req), utentePresente: utenteEsiste(db), primoAccesso: primoAccessoAperto() });
+  });
+
+  // Primo accesso (solo se il database non ha ancora l'utente E il server ha JARVIS_CODICE_PRIMO_ACCESSO):
+  // crea l'utente dal browser. Dopo la creazione la rotta non esiste più.
+  const SchemaPrimo = z.object({
+    codice: z.string().min(1).max(200),
+    nome: z.string().trim().min(1).max(60),
+    password: z.string().min(12).max(200),
+  });
+  const impronta = (s: string) => createHash("sha256").update(s).digest();
+  app.post("/api/primo-accesso", (req, res) => {
+    if (!primoAccessoAperto()) return res.status(404).json({ errore: "Non trovato." });
+    const chiaveIp = `primo:ip:${ip(req)}`;
+    const attesa = bloccatoPer(db, chiaveIp);
+    if (attesa > 0) return res.status(429).json({ errore: `Troppi tentativi. Riprova tra ${Math.ceil(attesa / 60_000)} minuti.` });
+    const dati = SchemaPrimo.safeParse(req.body);
+    if (!dati.success) return res.status(400).json({ errore: "Controlla i campi: la password deve avere almeno 12 caratteri." });
+    if (!timingSafeEqual(impronta(dati.data.codice), impronta(config.codicePrimoAccesso))) {
+      registraErrore(db, chiaveIp, REGOLA_ACCESSO_IP);
+      registra(db, "primo-accesso", "negato", "sistema", { ip: ip(req) });
+      return res.status(401).json({ errore: "Codice di primo accesso non corretto." });
+    }
+    const segreto = creaUtente(db, cifratore, dati.data.nome, dati.data.password);
+    azzera(db, chiaveIp);
+    registra(db, "primo-accesso", "fatto", "luigi", { ip: ip(req) });
+    res.json({ ok: true, segreto, link: uriOtpauth(segreto, dati.data.nome) });
   });
 
   const SchemaAccesso = z.object({ password: z.string().min(1).max(200), codice: z.string().regex(/^\d{6}$/) });

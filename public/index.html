@@ -35,6 +35,29 @@
       <p id="erroreAccesso" class="errore" role="alert"></p>
       <button class="primario" type="submit">Entra</button>
     </form>
+    <form id="formPrimo" class="scheda-accesso" hidden autocomplete="off">
+      <div class="marchio grande" aria-hidden="true"><i></i><i></i><i></i></div>
+      <h1>Primo accesso</h1>
+      <p class="sotto">Crea il tuo accesso a Jarvis. Si fa una volta sola.</p>
+      <label>Codice di primo accesso
+        <input id="primoCodice" type="password" required autocomplete="off">
+      </label>
+      <label>Come ti chiamo
+        <input id="primoNome" required maxlength="60" value="Luigi">
+      </label>
+      <label>Password (almeno 12 caratteri)
+        <input id="primoPassword" type="password" required minlength="12" autocomplete="new-password">
+      </label>
+      <p id="errorePrimo" class="errore" role="alert"></p>
+      <button class="primario" type="submit">Crea l'accesso</button>
+      <div id="primoFatto" hidden>
+        <p><b>Fatto.</b> Ora aggiungi Jarvis all'app di autenticazione (su iPhone: Impostazioni → Password, oppure Google Authenticator).</p>
+        <p>Tocca questo link dall'iPhone: <a id="primoLink" href="#">aggiungi a Password</a></p>
+        <p>Oppure inserisci a mano questo codice: <code id="primoSegreto"></code></p>
+        <p>Non verrà mostrato di nuovo. Quando l'hai aggiunto, entra con password e codice a 6 cifre.</p>
+        <button id="primoVaiAccesso" class="primario" type="button">Vai all'accesso</button>
+      </div>
+    </form>
   </section>
 
   <!-- APP -->

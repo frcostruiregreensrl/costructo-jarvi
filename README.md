@@ -50,6 +50,7 @@ Per la produzione: `npm run build` e poi `npm start` (con `NODE_ENV=production`,
 | `JARVIS_MODELLO`, `JARVIS_MODELLO_APPROFONDITO` | di serie `claude-haiku-5-5` e `claude-sonnet-5-5` | no |
 | `COSTRUCTO_URL`, `COSTRUCTO_TOKEN` | collegamento a Costructo (token `csa_…`); si possono dare anche dalle Impostazioni | no |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_CONTATTO` | notifiche push | per le notifiche |
+| `JARVIS_CODICE_PRIMO_ACCESSO` | codice monouso per creare l'utente dal browser quando il database è vuoto (es. primo avvio su Railway); dopo la creazione non serve più e si può togliere | al primo avvio |
 
 ElevenLabs è previsto come opzione ma **spento** in questa fase.
 
