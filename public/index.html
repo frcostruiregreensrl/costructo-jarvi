@@ -211,11 +211,20 @@
             <label>Indirizzo di Costructo
               <input id="colUrl" type="url" placeholder="https://…" autocomplete="off">
             </label>
-            <label>Token (inizia con csa_)
-              <input id="colToken" type="password" autocomplete="off" placeholder="lascia vuoto per non cambiarlo">
+            <h3 class="sottotitolo" id="titoloAziende">Aziende collegate</h3>
+            <ul id="listaAziende" class="lista-aziende" aria-labelledby="titoloAziende" aria-live="polite">
+              <li class="vuoto">Nessuna azienda collegata.</li>
+            </ul>
+            <label>Aggiungi il token di un'altra azienda (csa_…)
+              <input id="colToken" type="password" autocomplete="off" placeholder="csa_…" aria-describedby="aiutoToken">
             </label>
-            <p class="aiuto">Il token resta sul server, cifrato: qui vedi solo le ultime cifre (<span id="colTokenMascherato">nessuno</span>).</p>
+            <label id="rigaNomeAzienda" hidden>Nome da mostrare per questa azienda
+              <input id="colNomeAzienda" type="text" autocomplete="off" maxlength="60">
+            </label>
+            <button type="button" id="aggiungiAzienda" class="secondario">Aggiungi</button>
+            <p class="aiuto" id="aiutoToken">Ogni token di Costructo appartiene a una sola azienda: Jarvis legge il nome da Costructo. Puoi collegare fino a 5 aziende. I token restano sul server, cifrati: qui vedi solo le ultime cifre.</p>
             <button type="button" id="provaCostructo" class="secondario">Prova il collegamento</button>
+            <div role="status" aria-live="polite"><ul id="esitoProvaAziende" class="lista-esiti"></ul></div>
           </fieldset>
           <fieldset>
             <legend>Calendario personale (iCal, sola lettura)</legend>

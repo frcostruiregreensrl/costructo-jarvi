@@ -3,7 +3,7 @@
 import type { Db } from "./db.js";
 import type { Cervello, MessaggioCervello, RichiestaPasso, RispostaPasso, UsoToken } from "./cervello/tipi.js";
 import { CervelloNonDisponibile, PassoInterrotto } from "./cervello/tipi.js";
-import type { ClientCostructo } from "./costructo.js";
+import type { AziendaCollegata } from "./aziende.js";
 import { provaConto, diciNumero } from "./calcolo.js";
 import { apriConversazione, aggiungiMessaggio, ultimiMessaggi } from "./conversazioni.js";
 import { leggiImpostazioni } from "./impostazioni.js";
@@ -22,7 +22,8 @@ export interface Dipendenze {
   modelloPredefinito: string;
   modelloApprofondito: string;
   cervello: () => Promise<Cervello>;
-  costructo: () => ClientCostructo | null;
+  /** Le aziende collegate a Costructo (una per token). */
+  aziende: () => AziendaCollegata[];
   linkCalendario: () => string;
   fetchFn?: typeof fetch;
 }
@@ -181,9 +182,9 @@ export async function rispondi(dip: Dipendenze, d: Domanda, emetti: (e: EventoFl
   }
   emetti({ tipo: "modello", modello });
 
-  const costructo = dip.costructo();
+  const aziende = dip.aziende().filter((a) => a.client.configurato);
   const messaggi: MessaggioCervello[] = storia.map((m) => (m.ruolo === "utente" ? { ruolo: "utente", testo: m.testo } : { ruolo: "jarvis", testo: m.testo, chiamate: [] }));
-  messaggi.push({ ruolo: "utente", testo: contestoDelTurno(dip, d.vista, costructo) + `\n\nMessaggio di Luigi:\n${messaggio}` });
+  messaggi.push({ ruolo: "utente", testo: contestoDelTurno(dip, d.vista, aziende) + `\n\nMessaggio di Luigi:\n${messaggio}` });
   const strumenti = strumentiPerVista(d.vista);
   const scritture = new Map<string, number>();
 
@@ -239,7 +240,7 @@ export async function rispondi(dip: Dipendenze, d: Domanda, emetti: (e: EventoFl
       const risultati = [];
       for (const ch of r.chiamate) {
         const esito = await eseguiStrumento(ch.nome, ch.input, {
-          db, fuso, vista: d.vista, messaggioLuigi: messaggio, conversazione: conv, costructo,
+          db, fuso, vista: d.vista, messaggioLuigi: messaggio, conversazione: conv, aziende,
           linkCalendario: dip.linkCalendario, emetti, fetchFn: dip.fetchFn, scritture,
         });
         risultati.push({ id: ch.id, contenuto: esito.contenuto, errore: esito.errore });
@@ -265,15 +266,26 @@ export async function rispondi(dip: Dipendenze, d: Domanda, emetti: (e: EventoFl
   return chiudi();
 }
 
-/** Contesto che cambia a ogni turno: data, agenda locale, ricordi. Tutto marcato come dati. */
-function contestoDelTurno(dip: Dipendenze, vista: Vista, costructo: ClientCostructo | null): string {
+/** Contesto che cambia a ogni turno: data, aziende collegate, agenda locale, ricordi. Tutto marcato come dati. */
+export function contestoDelTurno(dip: Pick<Dipendenze, "db" | "fuso">, vista: Vista, aziende: AziendaCollegata[]): string {
   const ora = Date.now();
+  const disponibile = aziende.length > 0 && vista !== "privato";
   const parti = [
     `Adesso è ${descriviAdesso(ora, dip.fuso)} (fuso ${dip.fuso}). Scheda aperta: ${vista.toUpperCase()}.`,
-    `Costructo: ${costructo?.configurato && vista !== "privato" ? "collegato (sola lettura, usa gli strumenti)" : "non disponibile in questa scheda"}.`,
+    `Costructo: ${disponibile ? "collegato (sola lettura, usa gli strumenti)" : "non disponibile in questa scheda"}.`,
+  ];
+  if (disponibile) {
+    parti.push(
+      aziende.length > 1
+        ? `Aziende collegate: ${aziende.length}. Se non è chiaro di quale azienda parla Luigi, chiediglielo prima di agire; di' sempre di quale azienda è ogni dato. Nomi delle aziende:`
+        : "Azienda collegata (una sola: usa questa):",
+      marcaDati("aziende", aziende.map((a) => a.nome || "Costructo")),
+    );
+  }
+  parti.push(
     "Ricordi:",
     marcaDati("memoria", elencaMemorie(dip.db, vista).slice(0, 60).map((m) => `[${m.spazio}] ${m.testo}`)),
-  ];
+  );
   if (vista !== "lavoro") {
     parti.push("Agenda privata di Jarvis, prossimi 7 giorni:", marcaDati("agenda_jarvis", impegniProssimiGiorni(dip.db, 7, dip.fuso).slice(0, 40).map((i) => descriviImpegno(i, dip.fuso))));
   }
