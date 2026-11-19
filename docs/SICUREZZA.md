@@ -187,10 +187,50 @@ Ogni punto ha un test in `test/funzioni.test.ts`.
   (si tolgono e si scrive «[da completare]»).
 - **Registro**: mai i testi dei messaggi, numeri solo mascherati.
 
+## Fase 3, parte 2: 360dialog
+
+Ogni punto ha un test in `test/360dialog.test.ts` (con il 360dialog finto `test/d360Finto.ts`).
+
+### Controllo del webhook, fornitore per fornitore
+| Fornitore | Controllo obbligatorio | Quando il webhook è acceso |
+|---|---|---|
+| Meta diretto | firma `X-Hub-Signature-256` (HMAC-SHA256 del corpo grezzo con il segreto dell'app) | segreto dell'app + parola di verifica |
+| 360dialog | intestazione `X-Jarvis-Segreto` uguale al segreto scritto da Jarvis su 360dialog | segreto dell'intestazione presente |
+
+- Mai uno al posto dell'altro: con Meta l'intestazione segreta non basta; con 360dialog la firma di Meta da sola non basta
+  (se arriva anche la firma e il segreto dell'app è impostato, deve essere giusta anche quella).
+- Confronti a tempo costante (impronte SHA-256 + `timingSafeEqual`). Un'intestazione ripetuta due volte si rifiuta.
+- **Cambiare fornitore non apre mai il webhook**: il segreto dell'intestazione si cancella quando cambiano fornitore o indirizzo,
+  e il webhook resta spento (404) finché Jarvis non lo riconfigura; passando a Meta servono di nuovo segreto dell'app e parola di verifica.
+- Restano: controllo Host (421), limite di 2 MB, 600 richieste al minuto per IP, blocco dopo 20 controlli sbagliati in 15 minuti.
+
+### Segreto dell'intestazione
+- 32 byte casuali (`randomBytes`), generati da Jarvis quando Luigi preme «Configura il webhook su 360dialog»; cifrato nel segreto
+  `whatsapp` insieme alla chiave API. **Mai** restituito al browser (solo «impostato sì/no»), mai nel registro, mai nei messaggi.
+- Jarvis lo manda solo a 360dialog (`POST {indirizzo}/v1/configs/webhook`, con la chiave `D360-API-KEY`, senza reindirizzamenti).
+- Rifiuto sicuro di 360dialog → si torna al segreto di prima; esito incerto → vale il nuovo e il vecchio **per un'ora sola**.
+- Indirizzo del webhook: solo https, niente «_», niente porta, niente credenziali o parametri; altrimenti nessuna chiamata.
+
+### Chiave API e chiamate verso 360dialog
+- La chiave va solo all'indirizzo configurato (https, porta 443, nome pubblico, controllato anche con il DNS a ogni chiamata),
+  sempre con `redirect: "error"` e tempo massimo.
+- Allegati: la chiave va solo a 360dialog. Un url di Meta si chiede sullo stesso percorso ma a 360dialog; un url di un altro
+  server si rifiuta. Dimensioni massime come prima.
+- Prova di collegamento e sincronizzazione: solo con un pulsante di Luigi; la sincronizzazione chiede `{conferma: true}` e
+  non si ripete dopo un esito positivo (anche con due clic insieme ne parte una sola).
+
+### Invii e costi
+- Ogni invio di Jarvis (risposte confermate, conferme automatiche, modelli) passa dal **tetto mensile** (di serie 900): al tetto
+  non parte nessuna richiesta. Rifiuto sicuro → non contato; esito incerto → contato. I messaggi dal telefono non c'entrano.
+- Al massimo **20 messaggi al secondo** (in coda, in ordine).
+- Errore 131060: spiegato in italiano, nessun nuovo tentativo.
+- Notifiche di collegamento interrotto: testo fisso, mai numeri o nomi.
+
 ## Cosa resta aperto (da valutare)
 - Il limite tentativi si basa sull'IP: su Railway serve `JARVIS_PROXY=1` (vedi «Accesso»).
 - Il riconoscimento vocale del browser (Chrome) manda l'audio ai server di Google; Safari usa i servizi Apple. Va detto a Luigi.
 - Le conversazioni vengono inviate a Anthropic per avere la risposta (nessun addestramento per le API, secondo i termini commerciali; da confermare nella revisione).
-- Fase 3: anche i messaggi WhatsApp (testo breve) vanno a Anthropic per il riassunto. Il webhook è pubblico: la sua sicurezza dipende dal segreto dell'app di Meta, da tenere riservato.
+- Fase 3: anche i messaggi WhatsApp (testo breve) vanno a Anthropic per il riassunto. Il webhook è pubblico: la sua sicurezza dipende dal segreto dell'app di Meta o, con 360dialog, dal segreto dell'intestazione (che conoscono solo Jarvis e 360dialog).
+- Parte 2: i formati di 360dialog non sono ancora stati provati con un account vero (elenco in [FASE3-PARTE2.md](FASE3-PARTE2.md)).
 - Fase 3b: se Luigi accende la trascrizione, i vocali vanno a Google o a OpenAI. Le proposte (anche con foto e PDF) vanno a Costructo.
 - Fase 2: anche il testo breve delle mail va a Anthropic per il riassunto. La notifica di mail urgente mostra mittente e oggetto sulla schermata bloccata.

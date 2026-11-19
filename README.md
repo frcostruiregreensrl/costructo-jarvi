@@ -46,8 +46,18 @@ Un solo utente: Luigi.
 - Ricerca unica (WhatsApp, posta e Costructo), rubrica, «Chi è questo contatto: operaio X?», vocali trascritti (spenti di serie).
 - Tutto spento di serie. Prima Nota esclusa. Dettagli: [docs/FUNZIONI-WHATSAPP.md](docs/FUNZIONI-WHATSAPP.md).
 
+## Cosa fa in più (Fase 3, parte 2: WhatsApp con 360dialog)
+
+- Collegamento tramite **360dialog** (coesistenza: Luigi continua a usare l'app WhatsApp Business sul telefono) oppure Meta diretto.
+  In Impostazioni → WhatsApp: chiave API (cifrata, mai mostrata), «Configura il webhook su 360dialog», «Prova collegamento»,
+  «Sincronizza chat (una volta)», stato del collegamento e passi da seguire.
+- Messaggi in arrivo controllati secondo il fornitore: firma di Meta, oppure intestazione segreta scelta da Jarvis.
+- Avviso se Meta scollega il numero e promemoria nel briefing se non arriva niente da 12 giorni (regola dei 14 giorni).
+- **Contatore e tetto** dei messaggi mandati da Jarvis (di serie 900 al mese) con stima del costo in «Spesa del mese»;
+  le risposte dal telefono restano gratis. Dettagli e cose da verificare al primo uso vero: [docs/FASE3-PARTE2.md](docs/FASE3-PARTE2.md).
+
 Dettagli: [docs/ARCHITETTURA.md](docs/ARCHITETTURA.md), [docs/SICUREZZA.md](docs/SICUREZZA.md),
-[docs/CONSERVAZIONE.md](docs/CONSERVAZIONE.md), [docs/FASE1.md](docs/FASE1.md), [docs/AZIENDE.md](docs/AZIENDE.md), [docs/FASE2.md](docs/FASE2.md), [docs/FASE3.md](docs/FASE3.md), [docs/FUNZIONI-WHATSAPP.md](docs/FUNZIONI-WHATSAPP.md).
+[docs/CONSERVAZIONE.md](docs/CONSERVAZIONE.md), [docs/FASE1.md](docs/FASE1.md), [docs/AZIENDE.md](docs/AZIENDE.md), [docs/FASE2.md](docs/FASE2.md), [docs/FASE3.md](docs/FASE3.md), [docs/FUNZIONI-WHATSAPP.md](docs/FUNZIONI-WHATSAPP.md), [docs/FASE3-PARTE2.md](docs/FASE3-PARTE2.md).
 
 ## Avvio in locale
 
@@ -82,9 +92,10 @@ Per la produzione: `npm run build` e poi `npm start` (con `NODE_ENV=production`,
 
 ElevenLabs è previsto come opzione ma **spento** in questa fase.
 
-WhatsApp (Fase 3) non ha variabili d'ambiente: token, segreto dell'app e parola di verifica si scrivono in Impostazioni →
-WhatsApp e restano cifrati nel database. L'indirizzo del webhook da dare a Meta è il primo indirizzo https di `JARVIS_ORIGINE`
-seguito da `/api/whatsapp/webhook`. Nessun pacchetto nuovo (solo `fetch` e `node:crypto`).
+WhatsApp (Fase 3) non ha variabili d'ambiente: chiave API di 360dialog (o token, segreto dell'app e parola di verifica di Meta)
+si scrivono in Impostazioni → WhatsApp e restano cifrati nel database. L'indirizzo del webhook è il primo indirizzo https di
+`JARVIS_ORIGINE` seguito da `/api/whatsapp/webhook`; con 360dialog lo scrive Jarvis stesso (deve essere https, senza «_» e
+senza porta). Nessun pacchetto nuovo (solo `fetch` e `node:crypto`).
 
 ### Collegare più aziende di Costructo
 
@@ -122,7 +133,8 @@ npm test                  # test del server (node:test + tsx)
 npm run check             # controllo dei tipi TypeScript
 npm run test:interfaccia  # prova Playwright a 390 e 1280 px, tema chiaro e scuro (screenshot in ./prova-foto)
 # Posta e calendario Apple si provano con server finti (IMAP, SMTP, iCloud): nessuna casella vera.
-# WhatsApp si prova con un Meta finto (test/metaFinto.ts): nessun numero vero, nessuna chiamata a Meta.
+# WhatsApp si prova con un Meta finto (test/metaFinto.ts) e un 360dialog finto (test/d360Finto.ts):
+# nessun numero vero, nessuna chiamata a Meta o a 360dialog.
 # Le proposte si provano con la pagina Proposte finta di Costructo (test/costructoFinto.ts) e una trascrizione finta.
 ```
 
