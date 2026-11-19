@@ -12,6 +12,7 @@ import { leggiImpostazioni, salvaImpostazioni } from "./impostazioni.js";
 import type { ServizioWhatsapp } from "./whatsapp/servizio.js";
 import { leggiCollegamento, invioPronto } from "./whatsapp/collegamento.js";
 import { mandaModello, controllaModello } from "./whatsapp/invio.js";
+import { riepilogoInviiWa, TettoMessaggi } from "./whatsapp/contatore.js";
 import { leggiContatto, nomeContatto } from "./whatsapp/archivio.js";
 import { normalizzaTelefono, mascheraTelefono } from "./whatsapp/telefono.js";
 import { ErroreWhatsapp, PRIVATO } from "./whatsapp/tipi.js";
@@ -287,9 +288,11 @@ export function montaRotteFunzioni(app: Express, o: OpzioniRotteFunzioni): void 
       return res.status(409).json({ errore: "Il modello è cambiato dopo la conferma: non ho mandato niente." });
     }
     if (!stessaImpronta(preparato.impronta, impronta)) return res.status(409).json({ errore: "Il modello è cambiato dopo la conferma: non ho mandato niente." });
-    preparati.delete(id); // consumato: un secondo clic non manda un secondo messaggio
     const coll = leggiCollegamento(dip);
     if (!invioPronto(coll)) return res.status(409).json({ errore: "WhatsApp non è collegato (parte 2): non ho mandato niente." });
+    // Parte 2: al tetto del mese non parte niente e il promemoria preparato resta valido (si potrà mandare dopo).
+    if (riepilogoInviiWa(db, dip.fuso).raggiunto) return errore(res, new TettoMessaggi(leggiImpostazioni(db).whatsappTettoMessaggiMese));
+    preparati.delete(id); // consumato: un secondo clic non manda un secondo messaggio
     try {
       const wamid = await mandaModello(coll, { waId: normalizzaTelefono(m.telefono)!, userId: "" }, { nome: m.nome, lingua: m.lingua, parametri: m.parametri }, {
         fetchFn: dip.fetchFn, attesa: dip.attesaRiprova, risolvi: dip.risolvi, contatore: { db, fuso: dip.fuso, tipo: "modello" },
@@ -297,6 +300,8 @@ export function montaRotteFunzioni(app: Express, o: OpzioniRotteFunzioni): void 
       registra(db, "whatsapp.modello", "fatto", "luigi", { numero: mascheraTelefono(m.telefono), modello: m.nome, wamid: wamid.slice(0, 60) });
       res.json({ ok: true, messaggio: "Promemoria mandato con il modello di Meta." });
     } catch (e) {
+      // Bloccato dal tetto (due clic insieme): niente è partito, il promemoria resta usabile.
+      if (e instanceof TettoMessaggi) preparati.set(id, preparato);
       registra(db, "whatsapp.modello", "errore", "luigi", { numero: mascheraTelefono(m.telefono), motivo: String((e as Error).message).slice(0, 120) });
       errore(res, e);
     }

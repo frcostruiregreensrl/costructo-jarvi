@@ -8,8 +8,8 @@ import { registra } from "./registro.js";
 import { leggiImpostazioni } from "./impostazioni.js";
 import type { ServizioWhatsapp } from "./whatsapp/servizio.js";
 import { ErroreWhatsapp, MAX_TESTO_RISPOSTA, PRIVATO, type ContattoWa, type MessaggioWa, type RispostaWa } from "./whatsapp/tipi.js";
-import { collegamentoVisibile, invioPronto, salvaCollegamento, scollega, SchemaModificaCollegamento } from "./whatsapp/collegamento.js";
-import { dimenticaConnessione, leggiConnessione, leggiSync, segnaCollegato, syncFatta, ultimaAttivita } from "./whatsapp/connessione.js";
+import { collegamentoVisibile, invioPronto, webhookAttivo, salvaCollegamento, scollega, SchemaModificaCollegamento } from "./whatsapp/collegamento.js";
+import { dimenticaConnessione, leggiConnessione, leggiSync, assicuraConnessione, syncFatta, ultimaAttivita, ultimaEco } from "./whatsapp/connessione.js";
 import { configuraWebhook360, provaCollegamento, sincronizzaChat } from "./whatsapp/fornitore.js";
 import { riepilogoInviiWa } from "./whatsapp/contatore.js";
 import { elencaChat, leggiContatto, leggiRisposta, mediaDi, nomeContatto, nomeSpazio, risposteAperte, statoChat, ultimiMessaggi } from "./whatsapp/archivio.js";
@@ -66,7 +66,7 @@ export function montaRotteWhatsapp(app: Express, o: OpzioniRotteWa): void {
       confermeAutomatiche: leggiImpostazioni(db).whatsappConfermeAutomatiche,
       nascondiContenuto: leggiImpostazioni(db).whatsappNascondiContenuto,
       // Parte 2: stato del collegamento (eventi di Meta), sincronizzazione una tantum, messaggi mandati da Jarvis nel mese.
-      connessione: conn ? { stato: conn.stato, evento: conn.evento, quando: conn.quando, collegatoIl: conn.collegatoIl, ultimaAttivita: ultimaAttivita(db) } : null,
+      connessione: conn ? { stato: conn.stato, evento: conn.evento, quando: conn.quando, collegatoIl: conn.collegatoIl, ultimaAttivita: ultimaAttivita(db), ultimaEco: ultimaEco(db), coesistenza: conn.coesistenza } : null,
       sync: { ...sync, fatta: syncFatta(sync) },
       invii: riepilogoInviiWa(db, dip.fuso, dip.ora?.()),
     };
@@ -78,7 +78,7 @@ export function montaRotteWhatsapp(app: Express, o: OpzioniRotteWa): void {
     try {
       const c = await salvaCollegamento({ ...fonte, risolvi: dip.risolvi }, d.data);
       // Da qui partono le 24 ore della sincronizzazione e il controllo dei 14 giorni (nuovo fornitore = da capo).
-      if (invioPronto(c)) segnaCollegato(db, c.provider, dip.ora?.() ?? Date.now());
+      if (invioPronto(c) || webhookAttivo(c)) assicuraConnessione(db, c.provider, c.phoneNumberId, dip.ora?.() ?? Date.now());
       // Nel registro solo i nomi dei campi cambiati, mai i valori.
       registra(db, "collegamenti.modifica", "fatto", "luigi", { campi: ["whatsapp", ...Object.keys(d.data).filter((k) => (d.data as Record<string, unknown>)[k] !== "")] });
       res.json(statoImpostazioni());

@@ -4,7 +4,8 @@
 //    non passano da qui, non si contano e restano gratis;
 //  - limite di velocità: al massimo 20 messaggi al secondo (limite di WhatsApp per numero).
 // Da ottobre 2026 Meta fa pagare anche le risposte dentro le 24 ore oltre le prime 1.000 del mese per numero:
-// prezzo di serie 0,0248 € l'una (si può cambiare in Impostazioni). È una stima: il conto vero lo fa Meta (o 360dialog).
+// prezzo di serie 0,0248 € l'una (si può cambiare in Impostazioni). I modelli si pagano a parte, sempre (prezzo di serie
+// 0,03 €, da verificare sul listino di Meta). È una stima: il conto vero lo fa Meta (o 360dialog).
 import type { Db } from "../db.js";
 import { leggiImpostazioni } from "../impostazioni.js";
 import { meseDi } from "../consumi.js";
@@ -44,6 +45,11 @@ export function prenotaInvio(c: ContatoreInvio): () => void {
   };
 }
 
+/** Toglie dal mese un messaggio che sicuramente non è arrivato (errore 131060 dal webhook). */
+export function rilasciaInvio(db: Db, fuso: string, tipo: TipoInvioApi, quando: number): void {
+  db.prepare("UPDATE wa_invii_api SET n = MAX(0, n - 1) WHERE mese = ? AND tipo = ?").run(meseDi(quando, fuso), tipo);
+}
+
 export interface RiepilogoInviiWa {
   mese: string;
   inviati: number;
@@ -51,8 +57,14 @@ export interface RiepilogoInviiWa {
   tetto: number;
   raggiunto: boolean;
   sogliaGratuita: number;
+  /** Prezzo stimato di una risposta oltre le 1.000 gratuite. */
   prezzoEur: number;
-  /** Stima: (inviati − 1.000) × prezzo, mai sotto zero. */
+  /** Prezzo stimato di un modello (i modelli si pagano sempre, fuori dalle 1.000 risposte gratuite). */
+  prezzoModelloEur: number;
+  /**
+   * Stima: (risposte + conferme − 1.000) × prezzo, mai sotto zero, PIÙ modelli × prezzo del modello.
+   * I modelli non rientrano nei 1.000 messaggi di servizio gratuiti.
+   */
   stimaEur: number;
 }
 
@@ -63,10 +75,12 @@ export function riepilogoInviiWa(db: Db, fuso: string, ora = Date.now()): Riepil
   const perTipo: Record<TipoInvioApi, number> = { risposta: 0, conferma: 0, modello: 0 };
   for (const r of righe) if (r.tipo in perTipo) perTipo[r.tipo] = r.n;
   const inviati = perTipo.risposta + perTipo.conferma + perTipo.modello;
-  const prezzo = imp.whatsappPrezzoMessaggioEur;
+  const servizio = perTipo.risposta + perTipo.conferma;
+  const stima = Math.max(0, servizio - SOGLIA_GRATUITA) * imp.whatsappPrezzoMessaggioEur + perTipo.modello * imp.whatsappPrezzoModelloEur;
   return {
     mese, inviati, perTipo, tetto: imp.whatsappTettoMessaggiMese, raggiunto: inviati >= imp.whatsappTettoMessaggiMese,
-    sogliaGratuita: SOGLIA_GRATUITA, prezzoEur: prezzo, stimaEur: Math.round(Math.max(0, inviati - SOGLIA_GRATUITA) * prezzo * 100) / 100,
+    sogliaGratuita: SOGLIA_GRATUITA, prezzoEur: imp.whatsappPrezzoMessaggioEur, prezzoModelloEur: imp.whatsappPrezzoModelloEur,
+    stimaEur: Math.round(stima * 100) / 100,
   };
 }
 

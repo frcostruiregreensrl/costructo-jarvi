@@ -5,8 +5,7 @@
 //  - POST, il controllo dipende dal fornitore scelto (mai uno al posto dell'altro):
 //      meta      → firma X-Hub-Signature-256 = HMAC-SHA256 del corpo GREZZO con il segreto dell'app, OBBLIGATORIA;
 //      360dialog → intestazione X-Jarvis-Segreto uguale al segreto che Jarvis ha scritto su 360dialog, OBBLIGATORIA
-//                  (360dialog non firma con un segreto nostro); se arriva anche una firma di Meta e il segreto
-//                  dell'app è impostato, deve essere giusta anche quella. Confronti a tempo costante.
+//                  (360dialog non firma con un segreto nostro); un'eventuale firma di Meta si ignora. Confronti a tempo costante.
 //    Controllo mancante o sbagliato → 401; corpo al massimo 2 MB; JSON controllato con zod (tollerante);
 //  - limite di richieste per indirizzo IP; dopo 20 firme sbagliate in 15 minuti quell'IP è bloccato 15 minuti;
 //  - risponde 200 SUBITO e lavora dopo (Meta non deve aspettare); lo stesso messaggio non si salva due volte.
@@ -48,20 +47,19 @@ const unaSola = (v: string | string[] | undefined) => (Array.isArray(v) ? (v.len
  * `ora` serve per il segreto precedente di 360dialog (vale un'ora dopo il cambio).
  */
 export function controllaWebhook(c: CollegamentoWa, corpo: Buffer, intestazioni: Record<string, string | string[] | undefined>, ora = Date.now()): string {
-  const firma = unaSola(intestazioni["x-hub-signature-256"]);
   if (c.provider === "meta") {
+    const firma = unaSola(intestazioni["x-hub-signature-256"]);
     if (!firma) return "firma mancante";
     return firmaValida(corpo, firma, c.appSecret) ? "" : "firma non valida";
   }
-  // 360dialog: l'intestazione segreta è obbligatoria (una firma di Meta da sola non basta).
+  // 360dialog: conta SOLO l'intestazione segreta. Un'eventuale firma di Meta si ignora del tutto (né basta né blocca).
   const segreto = unaSola(intestazioni[INTESTAZIONE_SEGRETO.toLowerCase()]);
   if (!segreto) return "intestazione segreta mancante";
   if (!c.webhookSecret) return "segreto del webhook non configurato";
-  const giusto = ugualeCostante(segreto, c.webhookSecret)
-    || (!!c.webhookSecretPrecedente && ora < c.precedenteFino && ugualeCostante(segreto, c.webhookSecretPrecedente));
-  if (!giusto) return "intestazione segreta non valida";
-  if (firma && c.appSecret && !firmaValida(corpo, firma, c.appSecret)) return "firma non valida";
-  return "";
+  // Tutti i confronti si fanno sempre (tempo costante anche sul numero di segreti provati).
+  let giusto = ugualeCostante(segreto, c.webhookSecret);
+  for (const p of c.segretiPrecedenti) if (ugualeCostante(segreto, p.segreto) && ora < p.fino) giusto = true;
+  return giusto ? "" : "intestazione segreta non valida";
 }
 
 export interface OpzioniWebhook {
@@ -90,7 +88,8 @@ export function creaRotteWebhook(o: OpzioniWebhook): Router {
   });
 
   r.get("/", (req: Request, res: Response) => {
-    const coll = leggiCollegamento(o)!;
+    const coll = leggiCollegamento(o);
+    if (!webhookAttivo(coll)) return res.status(404).json({ errore: "Non trovato." });
     const modo = String(req.query["hub.mode"] ?? ""), token = String(req.query["hub.verify_token"] ?? ""), sfida = String(req.query["hub.challenge"] ?? "");
     if (modo !== "subscribe" || !token || !ugualeCostante(token, coll.verifyToken) || !/^[A-Za-z0-9_-]{1,200}$/.test(sfida)) {
       registraErrore(o.db, `whatsapp:firma:${ip(req)}`, REGOLA_FIRME);
@@ -102,7 +101,9 @@ export function creaRotteWebhook(o: OpzioniWebhook): Router {
   });
 
   r.post("/", express.raw({ type: () => true, limit: MAX_CORPO_WEBHOOK }), (req: Request, res: Response) => {
-    const coll = leggiCollegamento(o)!;
+    // Il collegamento si rilegge DOPO aver ricevuto il corpo: se nel frattempo è stato tolto, niente lavoro (404).
+    const coll = leggiCollegamento(o);
+    if (!webhookAttivo(coll)) return res.status(404).json({ errore: "Non trovato." });
     const corpo = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     const motivo = controllaWebhook(coll, corpo, req.headers);
     if (motivo) {

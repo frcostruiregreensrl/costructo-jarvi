@@ -439,11 +439,22 @@ test("18 modelli di Meta: spenti di serie (409); accesi servono conferma e impro
     assert.match((await doppio.json()).errore, /già stato usato/);
     assert.equal(meta.richieste.length, 1);
     assert.equal(riepilogoInviiWa(a.db, "Europe/Rome").perTipo.modello, 1, "parte 2: il modello conta nel contatore del mese");
+    // Parte 2 (revisione): al tetto il modello non parte e il promemoria preparato NON si consuma.
+    await a.chiama("/api/impostazioni", { method: "PUT", json: { whatsappTettoMessaggiMese: 1 } });
+    const pr2 = await (await a.chiama("/api/funzioni/modello/prepara", { method: "POST", json: m })).json();
+    const bloccato = await a.chiama("/api/funzioni/modello/invia", { method: "POST", json: { ...m, conferma: true, id: pr2.id, impronta: pr2.impronta } });
+    assert.equal(bloccato.status, 409);
+    assert.match((await bloccato.json()).errore, /tetto/);
+    assert.equal(meta.richieste.length, 1, "al tetto non parte niente");
+    await a.chiama("/api/impostazioni", { method: "PUT", json: { whatsappTettoMessaggiMese: 900 } });
+    const dopo = await (await a.chiama("/api/funzioni/modello/invia", { method: "POST", json: { ...m, conferma: true, id: pr2.id, impronta: pr2.impronta } })).json();
+    assert.ok(dopo.ok, "lo stesso promemoria si manda dopo aver alzato il tetto");
+    assert.equal(meta.richieste.length, 2);
     assert.deepEqual(meta.richieste[0].corpo.template, { name: "promemoria_appuntamento", language: { code: "it" }, components: [{ type: "body", parameters: [{ type: "text", text: "domani" }, { type: "text", text: "10:00" }] }] });
     assert.equal(meta.richieste[0].corpo.to, "393339990000");
     // il giro non manda mai modelli da solo
     await a.servizi.whatsapp.giroOra();
-    assert.equal(meta.richieste.length, 1);
+    assert.equal(meta.richieste.length, 2);
   } finally { await a.chiudi(); await meta.chiudi(); }
 });
 

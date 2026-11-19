@@ -593,7 +593,7 @@ const risolviFinto = async (host: string) => {
 };
 const BSP = {
   provider: "360dialog" as const, baseUrl: "https://waba.fornitore-finto.it/v1", versione: "v27.0", phoneNumberId: "", token: "chiave-bsp-finta", appSecret: "", verifyToken: "",
-  webhookSecret: "", webhookSecretPrecedente: "", precedenteFino: 0, webhookConfigurato: 0, percorsoSalute: "/health_status", percorsoSync: "/smb_app_data",
+  webhookSecret: "", segretiPrecedenti: [], webhookConfigurato: 0, percorsoSalute: "/health_status", percorsoSync: "/smb_app_data",
 };
 const META = { ...BSP, provider: "meta" as const, baseUrl: "", phoneNumberId: PHONE_NUMBER_ID, token: TOKEN_META };
 const rete = (code: string) => Object.assign(new TypeError("fetch failed"), { cause: { code } });

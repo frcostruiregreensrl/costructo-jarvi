@@ -324,14 +324,16 @@ test("strumenti: l'errore di un'azienda non nasconde i dati dell'altra", async (
 
 // ------------------------------------------------------------------ briefing e notifiche
 
+/** Orologio fisso del briefing (19/11/2026 alle 10:00 a Roma): il test non dipende dall'ora in cui gira. */
+const ORA_BRIEFING = daOraLocale(2026, 10, 19, 10, 0, "Europe/Rome");
 async function briefingDue(f: Awaited<ReturnType<typeof avviaCostructoFinto>>, db: ContestoStrumenti["db"]) {
   f.risposte["/briefing"] = { corpo: {
-    impegni: [{ titolo: "Sopralluogo Villa Verdi", inizio: new Date(Date.now() + 3600_000).toISOString() }],
+    impegni: [{ titolo: "Sopralluogo Villa Verdi", inizio: new Date(ORA_BRIEFING + 3600_000).toISOString() }],
     cantieri: [{ nome: "Villa Verdi" }, { nome: "Scuola" }, { nome: "Ponte" }],
     scadenze: [{ titolo: "F24 di novembre", scadenza: "2026-11-30" }],
   } };
   f.risposte2["/briefing"] = { corpo: { cantieri: [{ nome: "Capannone" }], fattureDaIncassare: [{ cliente: "Bianchi", residuo: 800 }], documentiInScadenza: [{ titolo: "DURC" }] } };
-  return creaBriefing({ db, fuso: "Europe/Rome", aziende: due(f.url), linkCalendario: "" });
+  return creaBriefing({ db, fuso: "Europe/Rome", aziende: due(f.url), linkCalendario: "", ora: ORA_BRIEFING });
 }
 
 test("briefing con due aziende: una parte per azienda, ogni frase con il nome, «Adesso» con il nome", async () => {
@@ -342,7 +344,7 @@ test("briefing con due aziende: una parte per azienda, ogni frase con il nome, �
     const testo = b.righe.map((r) => r.testo).join(" ");
     assert.match(testo, /Edilgreen: 3 cantieri aperti, 1 scadenza in arrivo \(la prima: F24 di novembre\)\./);
     assert.match(testo, /Rossi Costruzioni: 1 cantiere aperto, 1 documento in scadenza \(per esempio DURC\), 1 fattura da incassare per 800\s€\./);
-    assert.match(testo, /il primo alle \d{1,2}:\d\d: Edilgreen: Sopralluogo Villa Verdi/);
+    assert.match(testo, /il primo alle 11:00: Edilgreen: Sopralluogo Villa Verdi/);
     assert.deepEqual(b.aziende.map((x) => x.nome), ["Edilgreen", "Rossi Costruzioni"]);
     assert.equal(b.lavoro, null, "con più aziende i dati stanno in «aziende»");
     assert.equal(b.adesso.length, 3);
@@ -380,7 +382,7 @@ test("notifiche: due aziende → una notifica per azienda (più una privata solo
     assert.match(n[1].testo, /^Rossi Costruzioni: /);
     assert.ok(n.every((x) => x.testo.length <= 180));
 
-    aggiungiImpegno(db, { titolo: "Dentista", data: dataIso(Date.now(), "Europe/Rome"), ora: "23:59" }, "Europe/Rome");
+    aggiungiImpegno(db, { titolo: "Dentista", data: dataIso(ORA_BRIEFING, "Europe/Rome"), ora: "23:59" }, "Europe/Rome");
     n = notificheDelMattino(await briefingDue(f, db));
     assert.equal(n.length, 3);
     assert.match(n[2].testo, /1 impegno personale, il primo alle 23:59: Dentista/);

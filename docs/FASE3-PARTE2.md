@@ -18,16 +18,16 @@ Meta; cambiano l'indirizzo, la chiave e il modo di controllare chi manda i messa
 
 | Cosa | Prima (parte 1) | Ora (parte 2) |
 |---|---|---|
-| Fornitore | «Meta» o «fornitore» generico | **Meta diretto** o **360dialog**, scelto in Impostazioni (un vecchio «fornitore» si legge come 360dialog) |
-| Controllo dei messaggi in arrivo | sempre la firma di Meta | **Meta**: firma `X-Hub-Signature-256` obbligatoria. **360dialog**: intestazione segreta `X-Jarvis-Segreto` obbligatoria (360dialog non firma con un segreto nostro). Mai una al posto dell'altra |
+| Fornitore | «Meta» o «fornitore» generico | **Meta diretto** o **360dialog**, scelto in Impostazioni (un vecchio «fornitore» si legge come 360dialog; il **nome dell'intestazione** scelto nella parte 1 non si usa più: con 360dialog vale sempre `D360-API-KEY`) |
+| Controllo dei messaggi in arrivo | sempre la firma di Meta | **Meta**: firma `X-Hub-Signature-256` obbligatoria. **360dialog**: SOLO l'intestazione segreta `X-Jarvis-Segreto` (360dialog non firma con un segreto nostro; un'eventuale firma di Meta si ignora). Cambiando fornitore si cancellano segreto dell'app e parola di verifica di Meta |
 | Segreto del webhook (360dialog) | — | Lo genera Jarvis (32 byte casuali), lo salva cifrato e lo scrive **lui** su 360dialog: Luigi non lo vede mai |
 | Invio | `{indirizzo}/{id}/messages` con un'intestazione a scelta | `https://waba-v2.360dialog.io/messages` con `D360-API-KEY` (senza id del numero) |
 | Allegati | tramite il fornitore, qualunque url | solo url di Meta (si chiede lo stesso percorso a 360dialog) o di 360dialog; tutto il resto rifiutato |
 | Pulsanti nuovi | — | «Configura il webhook su 360dialog», «Prova collegamento», «Sincronizza chat (una volta)» |
-| Stato del collegamento | — | eventi di Meta (scollegato / ricollegato) con notifica; promemoria dei 14 giorni nel briefing |
+| Stato del collegamento | — | eventi di Meta (scollegato / ricollegato) con notifica; promemoria dei 14 giorni nel briefing (conta solo quello che Luigi scrive dal telefono) |
 | Costi | — | contatore dei messaggi mandati da Jarvis, stima in euro, **tetto mensile** (di serie 900) |
 | Velocità | — | al massimo 20 messaggi al secondo |
-| Errore 131060 | messaggio generico | spiegazione gentile, nessun nuovo tentativo |
+| Errore 131060 | messaggio generico | spiegazione gentile, nessun nuovo tentativo, la risposta si chiude (niente «manda di nuovo») e il messaggio esce dal tetto del mese |
 
 ## Passi per Luigi (da fare con calma, ognuno con il suo ok)
 
@@ -46,16 +46,21 @@ Meta; cambiano l'indirizzo, la chiave e il modo di controllare chi manda i messa
    Si fa **una volta sola**; dopo un esito positivo il pulsante si spegne.
 8. Prova con un numero di prova di Luigi: un messaggio ricevuto, una risposta confermata, nessuna «spunta blu».
 9. Da allora: apri WhatsApp Business sul telefono **almeno ogni 14 giorni**, altrimenti Meta scollega Jarvis.
-   Jarvis lo ricorda nel briefing se non arriva niente da 12 giorni.
+   Jarvis lo ricorda nel briefing se da 12 giorni non arriva nessun messaggio **scritto da Luigi** dal telefono (i messaggi dei
+   contatti non contano: arrivano anche se l'app resta chiusa). Con Meta diretto il promemoria c'è solo se la «Prova collegamento»
+   ha visto la coesistenza (o se arrivano messaggi scritti dal telefono).
 
 Da sapere: i messaggi scritti da **WhatsApp per Windows** o dallo **smartwatch** non arrivano a Jarvis (limite di Meta).
 
 ## Costi
 
 - **360dialog**: canone mensile del piano Regular (lo paga Luigi a 360dialog; Jarvis non lo vede).
+- **Modelli di Meta** (promemoria dopo le 24 ore, spenti di serie): si pagano **sempre**, fuori dalle 1.000 risposte gratuite.
+  Prezzo stimato di serie 0,03 € l'uno (da verificare sul listino di Meta; si cambia in Impostazioni).
 - **Meta**: da ottobre 2026 anche le risposte dentro le 24 ore si pagano **oltre le prime 1.000 del mese** per numero.
   Jarvis conta i messaggi che manda **lui** con la API (risposte che Luigi conferma, conferme automatiche, modelli) e mostra in
-  «Spesa del mese» una **stima**: (messaggi − 1.000) × 0,0248 € (il prezzo si cambia in Impostazioni).
+  «Spesa del mese» una **stima**: (risposte + conferme − 1.000) × 0,0248 € + modelli × 0,03 € (prezzi modificabili).
+  Un messaggio con errore 131060 si toglie dal conto; uno con esito incerto resta contato.
 - **Tetto mensile** dei messaggi di Jarvis: di serie **900**, così si resta nei 1.000 gratuiti. Al tetto Jarvis non manda più
   niente da solo e lo dice; Luigi può alzarlo in Impostazioni → WhatsApp.
 - **Le risposte che Luigi scrive dal telefono sono gratis**, non si contano e non sono mai bloccate.
@@ -96,13 +101,37 @@ Test: `test/360dialog.test.ts` (16 test) con `test/d360Finto.ts`.
 
 | Prova | Esito |
 |---|---|
-| `npm test` | **198/198** (182 di prima + 16 nuovi) |
+| `npm test` | **203/203** (182 di prima + 21 nuovi, di cui 5 dopo la revisione; altri controlli aggiunti a test esistenti) |
 | `npx tsc --noEmit` | nessun errore |
 | `npm run build` | funziona |
-| `node script/prova-interfaccia.mjs` (390/1280 px, chiaro/scuro) | **97/97** |
+| `node script/prova-interfaccia.mjs` (390/1280 px, chiaro/scuro) | **97/97** (cache `jarvis-v7`) |
 
-Nota: un test di prima (`aziende.test.ts`, ora del primo impegno) falliva prima delle 10 del mattino perché si aspettava
-due cifre nell'ora; corretto in un commit a parte.
+Nota: un test di prima (`aziende.test.ts`, ora del primo impegno) dipendeva dall'orologio (falliva prima delle 10 e tra le 23
+e mezzanotte): ora usa un orologio fisso.
+
+## Segreto del webhook: come cambia (dopo la revisione)
+
+- «Configura il webhook» parte **una volta alla volta** (un secondo clic aspetta).
+- 360dialog **conferma** → vale solo il segreto nuovo: quello vecchio si cancella subito.
+- 360dialog **rifiuta** → si torna esattamente a prima.
+- **Esito incerto** (tempo scaduto, errore 5xx) → valgono il nuovo e fino a **2** segreti vecchi, ognuno per **un'ora**: anche due
+  tentativi incerti di fila non bloccano i messaggi, qualunque segreto abbia preso 360dialog. Poi si ripreme «Configura».
+- Ogni scrittura è «solo se niente è cambiato nel frattempo»: un «Salva» fatto mentre 360dialog risponde non viene annullato, e
+  se nel frattempo si è passati a Meta il segreto di 360dialog non viene scritto.
+
+## Installazioni della parte 1
+
+- Un collegamento salvato nella parte 1 («fornitore», con un nome d'intestazione a scelta) si legge come 360dialog con
+  `D360-API-KEY`; il nome d'intestazione vecchio si perde. Il webhook resta spento finché non si preme «Configura il webhook».
+- La scheda del collegamento (stato, 14 giorni, sincronizzazione) si crea da sola (al primo evento, al giro di ogni minuto o al
+  primo Salva) senza azzerare una sincronizzazione già fatta. Si riparte da capo solo cambiando fornitore o numero.
+
+## Altre regole dopo la revisione
+
+- Le risposte di Meta e di 360dialog si leggono al massimo per 64 KB, gli allegati al massimo per la dimensione ammessa, a pezzi:
+  oltre il limite la lettura si ferma (anche se il server non dice quanto è grande).
+- Id degli allegati: solo lettere, cifre, «_», «-» e punti singoli (niente «..», niente «/»).
+- Promemoria con modello bloccato dal tetto: non parte niente e il promemoria preparato resta valido.
 
 ## Rischi e punti aperti
 

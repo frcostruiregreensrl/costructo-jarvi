@@ -21,10 +21,10 @@ import { scaricaMedia } from "../src/whatsapp/media.js";
 import { creaServizioWhatsapp } from "../src/whatsapp/servizio.js";
 import { elaboraWebhook, spiegaErroreMeta } from "../src/whatsapp/elabora.js";
 import { preparaRisposta, inviaRisposta, improntaRisposta } from "../src/whatsapp/risposte.js";
-import { leggiConnessione, segnaCollegato, leggiSync, TESTO_INTERROTTO } from "../src/whatsapp/connessione.js";
+import { leggiConnessione, assicuraConnessione, leggiSync, TESTO_INTERROTTO } from "../src/whatsapp/connessione.js";
 import { creaLimitatore, prenotaInvio, riepilogoInviiWa, TettoMessaggi } from "../src/whatsapp/contatore.js";
 import { meseDi } from "../src/consumi.js";
-import { InvioIncerto, type CollegamentoWa, type ContattoWa, type DipendenzeWhatsapp } from "../src/whatsapp/tipi.js";
+import { InvioIncerto, NonConsegnabile, type CollegamentoWa, type ContattoWa, type DipendenzeWhatsapp } from "../src/whatsapp/tipi.js";
 
 const ORIGINI = ["https://jarvis.esempio.it"];
 const SEGRETO_APP = "segretoappfinto0123456789abcdef";
@@ -106,11 +106,14 @@ test("360dialog: webhook con intestazione segreta obbligatoria (mancante, sbagli
     assert.equal(messaggiSalvati(a.db), 0, "niente salvato");
     assert.equal((await manda(ricevuto({ da: MARIO, testo: "Ciao" }), { [INTESTAZIONE_SEGRETO]: segreto })).status, 200);
     assert.equal(messaggiSalvati(a.db), 1);
-    // Con il segreto dell'app impostato, una firma presente ma sbagliata fa rifiutare anche con l'intestazione giusta.
-    await salvaCollegamento(fonte(a.db), { appSecret: SEGRETO_APP });
-    const doppio = ricevuto({ da: MARIO, testo: "Doppio controllo" });
-    assert.equal((await manda(doppio, { [INTESTAZIONE_SEGRETO]: segreto, "X-Hub-Signature-256": firma("altro", SEGRETO_APP) })).status, 401);
-    assert.equal((await manda(doppio, { [INTESTAZIONE_SEGRETO]: segreto, "X-Hub-Signature-256": firma(JSON.stringify(doppio), SEGRETO_APP) })).status, 200);
+    // Intestazione ripetuta due volte (HTTP vero: Node le unisce con «, »): rifiutata.
+    const h = new Headers({ "Content-Type": "application/json" });
+    h.append(INTESTAZIONE_SEGRETO, segreto);
+    h.append(INTESTAZIONE_SEGRETO, segreto);
+    const dop = await fetch(`${a.base}/api/whatsapp/webhook`, { method: "POST", headers: h, body: JSON.stringify(ricevuto({ da: MARIO, testo: "Doppia" })) });
+    await a.servizi.whatsapp.attendi();
+    assert.equal(dop.status, 401, "intestazione doppia rifiutata");
+    assert.equal(messaggiSalvati(a.db), 1);
     const reg = JSON.stringify(a.db.prepare("SELECT * FROM registro").all());
     assert.ok(reg.includes("intestazione segreta mancante") && reg.includes("intestazione segreta non valida"), "rifiuti nel registro");
     assert.ok(!reg.includes(segreto), "il segreto non è nel registro");
@@ -132,8 +135,12 @@ test("Meta diretto: la firma resta obbligatoria; l'intestazione segreta non la s
     assert.equal((await manda(ricevuto({ da: MARIO }), { [INTESTAZIONE_SEGRETO]: segreto })).status, 401, "con Meta l'intestazione non basta");
     const ok = ricevuto({ da: MARIO, testo: "Firmato" });
     assert.equal((await manda(ok, { "X-Hub-Signature-256": firma(JSON.stringify(ok), SEGRETO_APP) })).status, 200);
-    // Meta → 360dialog: il webhook resta spento finché Jarvis non riconfigura (la firma di Meta non basta più).
+    // Meta → 360dialog: il webhook resta spento finché Jarvis non riconfigura (la firma di Meta non basta più);
+    // segreto dell'app e parola di verifica di Meta si cancellano.
     await salvaCollegamento(fonte(a.db), { provider: "360dialog", token: CHIAVE_360 });
+    const dopoCambio = leggiCollegamento({ db: a.db, cifratore })!;
+    assert.equal(dopoCambio.appSecret, "");
+    assert.equal(dopoCambio.verifyToken, "");
     const dopo = ricevuto({ da: MARIO, testo: "Dopo il cambio" });
     assert.equal((await manda(dopo, { "X-Hub-Signature-256": firma(JSON.stringify(dopo), SEGRETO_APP), [INTESTAZIONE_SEGRETO]: segreto })).status, 404, "il vecchio segreto non vale più");
   } finally { await a.chiudi(); await d360.chiudi(); }
@@ -143,13 +150,16 @@ test("controllo del webhook: il segreto precedente vale solo per un'ora dopo il 
   const { db, chiudi } = dbProvvisorio();
   try {
     const c: CollegamentoWa = {
-      ...(await collega360(db)), webhookSecret: "nuovo-segreto-0123456789abcdefghijklmnopq", webhookSecretPrecedente: "vecchio-segreto-0123456789abcdefghijklmn", precedenteFino: 1_000_000,
+      ...(await collega360(db)), webhookSecret: "nuovo-segreto-0123456789abcdefghijklmnopq",
+      segretiPrecedenti: [{ segreto: "vecchio-segreto-0123456789abcdefghijklmn", fino: 1_000_000 }],
     };
+    const vecchio = c.segretiPrecedenti[0].segreto;
     const corpo = Buffer.from("{}");
     assert.equal(controllaWebhook(c, corpo, { "x-jarvis-segreto": c.webhookSecret }, 2_000_000), "");
-    assert.equal(controllaWebhook(c, corpo, { "x-jarvis-segreto": c.webhookSecretPrecedente }, 999_999), "");
-    assert.equal(controllaWebhook(c, corpo, { "x-jarvis-segreto": c.webhookSecretPrecedente }, 1_000_001), "intestazione segreta non valida");
+    assert.equal(controllaWebhook(c, corpo, { "x-jarvis-segreto": vecchio }, 999_999), "");
+    assert.equal(controllaWebhook(c, corpo, { "x-jarvis-segreto": vecchio }, 1_000_001), "intestazione segreta non valida");
     assert.equal(controllaWebhook(c, corpo, { "x-jarvis-segreto": [c.webhookSecret, "altro"] }, 0), "intestazione segreta mancante", "intestazione doppia rifiutata");
+    assert.equal(controllaWebhook(c, corpo, { "x-jarvis-segreto": `${c.webhookSecret}, ${c.webhookSecret}` }, 0), "intestazione segreta non valida");
     assert.equal(controllaWebhook({ ...c, provider: "meta", appSecret: SEGRETO_APP }, corpo, { "x-jarvis-segreto": c.webhookSecret }), "firma mancante");
   } finally { chiudi(); }
 });
@@ -172,6 +182,7 @@ test("Configura il webhook: indirizzo giusto, chiave D360-API-KEY, intestazione 
     const c = leggiCollegamento(p.dip)!;
     assert.equal(c.webhookSecret, segreto);
     assert.ok(c.webhookConfigurato > 0);
+    assert.deepEqual(c.segretiPrecedenti, [], "esito confermato: nessun segreto vecchio");
     // Indirizzi che 360dialog non accetta: niente chiamata.
     for (const o of [["https://jarvis_luigi.esempio.it"], ["https://jarvis.esempio.it:8443"], ["http://jarvis.esempio.it"], ["https://jarvis.esempio.it/a_b"]]) {
       await assert.rejects(configuraWebhook360(opz(p), o), /trattino basso|porta|https/, o[0]);
@@ -190,8 +201,8 @@ test("Configura il webhook: indirizzo giusto, chiave D360-API-KEY, intestazione 
     assert.equal(incerto.ok, false);
     const c2 = leggiCollegamento(p.dip)!;
     assert.notEqual(c2.webhookSecret, segreto);
-    assert.equal(c2.webhookSecretPrecedente, segreto);
-    assert.ok(c2.precedenteFino > Date.now());
+    assert.equal(c2.segretiPrecedenti[0].segreto, segreto);
+    assert.ok(c2.segretiPrecedenti[0].fino > Date.now());
     // Un reindirizzamento non si segue mai.
     p.d360.prossime.push({ stato: 302, intestazioni: { Location: "https://altro.esempio.it/v1/configs/webhook" } });
     assert.equal((await configuraWebhook360(opz(p), ORIGINI)).ok, false);
@@ -344,7 +355,7 @@ test("Prova collegamento: Meta (is_on_biz_app / CLOUD_API) e 360dialog (percorso
 test("Sincronizza chat: contatti e poi storico, UNA volta sola; un passo fallito si riprova da solo; Meta con /{id}/smb_app_data", async () => {
   const p = await prova();
   try {
-    segnaCollegato(p.db, "360dialog", p.t.ora);
+    assicuraConnessione(p.db, "360dialog", "", p.t.ora);
     // Contatti ok, storico rifiutato
     p.d360.prossime.push({ corpo: { success: true } }, { stato: 400, corpo: { error: { message: "already synced" } } });
     const primo = await sincronizzaChat(opz(p));
@@ -362,7 +373,7 @@ test("Sincronizza chat: contatti e poi storico, UNA volta sola; un passo fallito
     await assert.rejects(sincronizzaChat(opz(p)), /una volta sola/);
     assert.equal(p.d360.richieste.length, 3);
     // Due clic insieme: una sola sincronizzazione
-    segnaCollegato(p.db, "meta", p.t.ora); // nuovo fornitore: da capo
+    assicuraConnessione(p.db, "meta", "", p.t.ora); // nuovo fornitore: da capo
     const meta = await avviaMetaFinto();
     try {
       await salvaCollegamento(fonte(p.db), { provider: "meta", phoneNumberId: PHONE_NUMBER_ID, token: TOKEN_META });
@@ -379,7 +390,7 @@ test("Sincronizza chat: contatti e poi storico, UNA volta sola; un passo fallito
 test("account_update: PARTNER_REMOVED / ACCOUNT_OFFBOARDED → interrotto + notifica; ACCOUNT_RECONNECTED → di nuovo attivo; nel briefing", async () => {
   const p = await prova();
   try {
-    segnaCollegato(p.db, "360dialog", p.t.ora);
+    assicuraConnessione(p.db, "360dialog", "", p.t.ora);
     const s = creaServizioWhatsapp(p.dip);
     const evento = (e: string) => webhook("account_update", { phone_number: "393400000001", event: e });
     await s.ricevi(evento("PARTNER_REMOVED"));
@@ -406,45 +417,80 @@ test("account_update: PARTNER_REMOVED / ACCOUNT_OFFBOARDED → interrotto + noti
   } finally { await p.chiudi(); }
 });
 
-test("regola dei 14 giorni: promemoria nel briefing se non arriva niente da 12 giorni (né messaggi né eco)", async () => {
+test("regola dei 14 giorni: promemoria se da 12 giorni Luigi non scrive dal telefono (contano solo le eco); niente per Meta senza coesistenza", async () => {
   const p = await prova();
   try {
     const t0 = p.t.ora;
     const briefing = async (ora: number) => (await creaBriefing({ db: p.db, fuso: "Europe/Rome", linkCalendario: "", ora })).righe.map((r) => r.testo).join(" ");
     assert.doesNotMatch(await briefing(t0 + 20 * GIORNO), /WhatsApp Business/, "non collegato: nessun promemoria");
-    segnaCollegato(p.db, "360dialog", t0);
+    assicuraConnessione(p.db, "360dialog", "", t0);
     elaboraWebhook(p.db, ricevuto({ da: MARIO, quando: t0 }), "", t0);
     assert.doesNotMatch(await briefing(t0 + 11 * GIORNO), /14 giorni/);
-    assert.match(await briefing(t0 + 12 * GIORNO + 1000), /niente di nuovo da 12 giorni.*almeno ogni 14 giorni/);
+    // Messaggi dei CONTATTI non contano: arrivano anche se Luigi non apre l'app.
+    elaboraWebhook(p.db, ricevuto({ da: MARIO, quando: t0 + 10 * GIORNO }), "", t0 + 10 * GIORNO);
+    assert.match(await briefing(t0 + 12 * GIORNO + 1000), /da 12 giorni non scrivi dall'app WhatsApp Business.*almeno ogni 14 giorni/);
     // Luigi scrive dal telefono (eco): il conto riparte
     elaboraWebhook(p.db, eco({ a: MARIO, quando: t0 + 12 * GIORNO }), "", t0 + 12 * GIORNO);
     assert.doesNotMatch(await briefing(t0 + 13 * GIORNO), /14 giorni/);
-    // Lo storico non conta come attività
     assert.match(await briefing(t0 + 25 * GIORNO), /da 13 giorni/);
+    // Meta diretto: senza coesistenza (non nota o is_on_biz_app falso) nessun promemoria; con coesistenza sì.
+    assicuraConnessione(p.db, "meta", PHONE_NUMBER_ID, t0);
+    assert.doesNotMatch(await briefing(t0 + 25 * GIORNO), /14 giorni/, "coesistenza non nota");
+    const { segnaCoesistenza } = await import("../src/whatsapp/connessione.js");
+    await salvaCollegamento(fonte(p.db), { provider: "meta", phoneNumberId: PHONE_NUMBER_ID, token: TOKEN_META });
+    segnaCoesistenza(p.dip, false);
+    assert.doesNotMatch(await briefing(t0 + 25 * GIORNO), /14 giorni/, "is_on_biz_app falso");
+    segnaCoesistenza(p.dip, true);
+    assert.match(await briefing(t0 + 25 * GIORNO), /14 giorni/);
   } finally { await p.chiudi(); }
 });
 
 // ------------------------------------------------------------------ errori, velocità, contatore e tetto
 
-test("errore 131060 (primo messaggio a un contatto nuovo / dispositivo non supportato): spiegazione gentile, nessun nuovo tentativo", async () => {
+test("errore 131060: spiegazione gentile, nessun nuovo tentativo, nessun «manda di nuovo», fuori dal tetto (subito e dal webhook)", async () => {
   const p = await prova();
   try {
     assert.match(spiegaErroreMeta(131060), /primo messaggio a un contatto nuovo.*Non riprovo.*telefono/);
     const c = leggiCollegamento(p.dip)!;
     p.d360.prossime.push({ stato: 400, corpo: { error: { code: 131060, message: "not delivered" } } });
-    await assert.rejects(mandaTesto(c, { waId: MARIO, userId: "" }, "Ciao", { fetchFn: p.d360.fetch, risolvi: risolvi360, attesa: async () => {} }), /contatto nuovo/);
+    await assert.rejects(mandaTesto(c, { waId: MARIO, userId: "" }, "Ciao", { fetchFn: p.d360.fetch, risolvi: risolvi360, attesa: async () => {} }), (e: Error) => e instanceof NonConsegnabile);
     assert.equal(p.d360.richieste.length, 1, "nessun nuovo tentativo");
-    // Stato «failed» con 131060 dal webhook: la risposta resta in errore con la spiegazione, nessun nuovo invio.
     elaboraWebhook(p.db, ricevuto({ da: MARIO, testo: "Salve" }), "", p.t.ora);
-    const r = preparaRisposta(p.dip, contatto(p.db, MARIO).id, "Buongiorno, ci sentiamo domani.");
-    const e = await inviaRisposta(p.dip, r.id, improntaRisposta(r));
-    assert.equal(e.inviata, true);
-    const wamid = (p.db.prepare("SELECT wamid FROM wa_risposte WHERE id = ?").get(r.id) as { wamid: string }).wamid;
-    elaboraWebhook(p.db, webhook("messages", { statuses: [{ id: wamid, status: "failed", errors: [{ code: 131060, title: "x" }] }] }), "", p.t.ora);
-    const dopo = p.db.prepare("SELECT stato, esito FROM wa_risposte WHERE id = ?").get(r.id) as { stato: string; esito: string };
-    assert.equal(dopo.stato, "errore");
+    const id = contatto(p.db, MARIO).id;
+    const mese = () => riepilogoInviiWa(p.db, "Europe/Rome", p.t.ora).inviati;
+    // 1) Rifiuto subito (risposta della API): la risposta si chiude, non si può rimandare, non conta nel tetto.
+    const r1 = preparaRisposta(p.dip, id, "Buongiorno, la richiamo.");
+    p.d360.prossime.push({ stato: 400, corpo: { error: { code: 131060 } } });
+    const e1 = await inviaRisposta(p.dip, r1.id, improntaRisposta(r1));
+    assert.equal(e1.inviata, false);
+    assert.match(e1.messaggio, /contatto nuovo/);
+    assert.equal((p.db.prepare("SELECT stato FROM wa_risposte WHERE id = ?").get(r1.id) as { stato: string }).stato, "scartata");
+    assert.equal(mese(), 0, "fuori dal tetto");
+    const di = await inviaRisposta(p.dip, r1.id, improntaRisposta(r1));
+    assert.equal(di.inviata, false);
+    assert.match(di.messaggio, /non è più in attesa/);
+    assert.equal(p.d360.richieste.filter((x) => x.percorso === "/messages").length, 2, "nessun nuovo invio");
+    // 2) Partito, poi «failed» 131060 dal webhook: chiusa, tolta dal tetto UNA volta sola (anche se il webhook si ripete).
+    const r2 = preparaRisposta(p.dip, id, "Buongiorno, ci sentiamo domani.");
+    assert.equal((await inviaRisposta(p.dip, r2.id, improntaRisposta(r2))).inviata, true);
+    assert.equal(mese(), 1);
+    const wamid = (p.db.prepare("SELECT wamid FROM wa_risposte WHERE id = ?").get(r2.id) as { wamid: string }).wamid;
+    const s = creaServizioWhatsapp(p.dip);
+    const fallito = webhook("messages", { statuses: [{ id: wamid, status: "failed", errors: [{ code: 131060, title: "x" }] }] });
+    await s.ricevi(fallito);
+    await s.ricevi(fallito);
+    s.ferma();
+    const dopo = p.db.prepare("SELECT stato, esito FROM wa_risposte WHERE id = ?").get(r2.id) as { stato: string; esito: string };
+    assert.equal(dopo.stato, "scartata", "dalla pagina non si rimanda");
     assert.match(dopo.esito, /contatto nuovo/);
-    assert.equal(p.d360.richieste.filter((x) => x.percorso === "/messages").length, 2, "nessun invio in più");
+    assert.equal(mese(), 0, "tolta dal tetto una volta");
+    assert.match((await inviaRisposta(p.dip, r2.id, improntaRisposta(r2))).messaggio, /già partita|non è più in attesa/);
+    assert.equal(p.d360.richieste.filter((x) => x.percorso === "/messages").length, 3);
+    // Un altro errore (non 131060) resta «errore» e si può rimandare, come prima.
+    const r3 = preparaRisposta(p.dip, id, "Terza");
+    p.d360.prossime.push({ stato: 400, corpo: { error: { code: 100 } } });
+    await inviaRisposta(p.dip, r3.id, improntaRisposta(r3));
+    assert.equal((p.db.prepare("SELECT stato FROM wa_risposte WHERE id = ?").get(r3.id) as { stato: string }).stato, "errore");
   } finally { await p.chiudi(); }
 });
 
@@ -499,12 +545,20 @@ test("contatore del mese e tetto: bloccano SOLO gli invii di Jarvis; esito incer
     // Tetto anche per le prenotazioni dirette (conferme e modelli usano lo stesso contatore)
     salvaImpostazioni(p.db, { whatsappTettoMessaggiMese: 3 });
     assert.throws(() => prenotaInvio({ db: p.db, fuso: "Europe/Rome", tipo: "conferma" }), (e: Error) => e instanceof TettoMessaggi);
-    // Stima: 1.100 messaggi → 100 oltre i 1.000 gratuiti × 0,0248 € = 2,48 €
-    p.db.prepare("INSERT INTO wa_invii_api (mese, tipo, n) VALUES (?, 'modello', 1097) ON CONFLICT(mese, tipo) DO UPDATE SET n = 1097").run(meseDi(Date.now(), "Europe/Rome"));
+    // Stima: 1.100 risposte → 100 oltre le 1.000 gratuite × 0,0248 € = 2,48 €; i modelli si pagano a parte (10 × 0,03 €).
+    const mese = meseDi(Date.now(), "Europe/Rome");
+    const metti = (tipo: string, n: number) => p.db.prepare("INSERT INTO wa_invii_api (mese, tipo, n) VALUES (?, ?, ?) ON CONFLICT(mese, tipo) DO UPDATE SET n = excluded.n").run(mese, tipo, n);
+    metti("risposta", 1100);
+    metti("conferma", 0);
+    assert.equal(riepilogoInviiWa(p.db, "Europe/Rome").stimaEur, 2.48);
+    metti("modello", 10);
     const s = riepilogoInviiWa(p.db, "Europe/Rome");
-    assert.equal(s.inviati, 1100);
-    assert.equal(s.stimaEur, 2.48);
-    salvaImpostazioni(p.db, { whatsappPrezzoMessaggioEur: 0.05 });
+    assert.equal(s.inviati, 1110);
+    assert.equal(s.stimaEur, 2.78, "i modelli non rientrano nei 1.000 gratuiti");
+    metti("risposta", 500);
+    assert.equal(riepilogoInviiWa(p.db, "Europe/Rome").stimaEur, 0.3, "sotto i 1.000: si pagano solo i modelli");
+    salvaImpostazioni(p.db, { whatsappPrezzoMessaggioEur: 0.05, whatsappPrezzoModelloEur: 0 });
+    metti("risposta", 1100);
     assert.equal(riepilogoInviiWa(p.db, "Europe/Rome").stimaEur, 5);
   } finally { await p.chiudi(); }
 });
@@ -540,4 +594,151 @@ test("vecchio collegamento della parte 1 («bsp») letto come 360dialog", async 
     assert.equal(c.webhookSecret, "");
     assert.equal(webhookAttivo(c), false, "senza segreto dell'intestazione il webhook resta spento");
   } finally { chiudi(); }
+});
+
+// ------------------------------------------------------------------ dopo la revisione indipendente
+
+test("revisione: installazione della parte 1 senza scheda del collegamento — evento prima di Salva, sincronizzazione e poi Salva, promemoria", async () => {
+  const p = await prova();
+  try {
+    const { salvaSegreto, scriviValore } = await import("../src/impostazioni.js");
+    // Collegamento salvato nella parte 1 («bsp», con un nome d'intestazione suo) e nessuna scheda del collegamento.
+    salvaSegreto(p.db, cifratore, "whatsapp", JSON.stringify({ provider: "bsp", baseUrl: BASE_360_FINTA, versione: "v27.0", phoneNumberId: "", token: CHIAVE_360, intestazione: "X-Mia-Chiave", appSecret: "", verifyToken: "" }));
+    scriviValore(p.db, "waConnessione", null);
+    // 1) Un evento arriva prima di qualunque Salva: la scheda nasce con il fornitore configurato (360dialog, non «meta»).
+    const s = creaServizioWhatsapp(p.dip);
+    await s.ricevi(webhook("account_update", { event: "ACCOUNT_OFFBOARDED" }));
+    const c1 = leggiConnessione(p.db)!;
+    assert.equal(c1.provider, "360dialog");
+    assert.equal(c1.stato, "interrotto");
+    assert.equal(p.notifiche.inviate.length, 1);
+    // 2) Sincronizzazione fatta, poi Luigi preme Salva (stesso fornitore): la sincronizzazione NON si azzera e non si ripete.
+    await s.ricevi(webhook("account_update", { event: "ACCOUNT_RECONNECTED" }));
+    assert.equal((await sincronizzaChat(opz(p))).ok, true);
+    await salvaCollegamento(fonte(p.db), { provider: "360dialog", phoneNumberId: PHONE_NUMBER_ID });
+    assicuraConnessione(p.db, "360dialog", PHONE_NUMBER_ID, p.t.ora);
+    assert.equal(leggiSync(p.db).storico.stato, "fatto", "sincronizzazione conservata");
+    await assert.rejects(sincronizzaChat(opz(p)), /una volta sola/);
+    assert.equal(leggiConnessione(p.db)!.numero, PHONE_NUMBER_ID);
+    // La chiave va con D360-API-KEY (il nome dell'intestazione della parte 1 non si usa più).
+    assert.ok(p.d360.richieste.every((r) => r.intestazioni["d360-api-key"] === CHIAVE_360 && !r.intestazioni["x-mia-chiave"]));
+    // Un altro numero, o un altro fornitore: da capo.
+    assicuraConnessione(p.db, "360dialog", "999999999", p.t.ora);
+    assert.equal(leggiSync(p.db).storico.stato, "mai", "altro numero: sincronizzazione da rifare");
+    // 3) Promemoria anche per queste installazioni: la scheda la crea il giro di ogni minuto.
+    scriviValore(p.db, "waConnessione", null);
+    await s.giroOra();
+    s.ferma();
+    const c3 = leggiConnessione(p.db)!;
+    assert.equal(c3.provider, "360dialog");
+    const testo = (await creaBriefing({ db: p.db, fuso: "Europe/Rome", linkCalendario: "", ora: c3.collegatoIl + 13 * GIORNO })).righe.map((r) => r.testo).join(" ");
+    assert.match(testo, /14 giorni/);
+  } finally { await p.chiudi(); }
+});
+
+test("revisione: «Configura il webhook» uno alla volta; un Salva fatto in mezzo non viene annullato; segreto salvato = quello di 360dialog", async () => {
+  const p = await prova();
+  try {
+    // Due clic insieme: uno solo parte.
+    const [a, b] = await Promise.allSettled([configuraWebhook360(opz(p), ORIGINI), configuraWebhook360(opz(p), ORIGINI)]);
+    assert.equal([a, b].filter((x) => x.status === "rejected" && /già in corso/.test(String((x as PromiseRejectedResult).reason?.message))).length, 1);
+    assert.equal(p.d360.richieste.length, 1);
+    // Salva (id del numero) mentre 360dialog risponde: resta, e il segreto salvato è quello mandato.
+    const conSalva = (async (u: string | URL | Request, i?: RequestInit) => {
+      if (String(u).endsWith("/v1/configs/webhook")) await salvaCollegamento(fonte(p.db), { phoneNumberId: PHONE_NUMBER_ID });
+      return p.d360.fetch(u, i);
+    }) as typeof fetch;
+    assert.equal((await configuraWebhook360({ ...opz(p), fetchFn: conSalva }, ORIGINI)).ok, true);
+    const mandato = (p.d360.richieste.at(-1)!.corpo.headers as Record<string, string>)[INTESTAZIONE_SEGRETO];
+    const c = leggiCollegamento(p.dip)!;
+    assert.equal(c.phoneNumberId, PHONE_NUMBER_ID, "il Salva in mezzo resta");
+    assert.equal(c.webhookSecret, mandato);
+    assert.deepEqual(c.segretiPrecedenti, []);
+    // Rifiuto con un Salva in mezzo: si torna al segreto di prima, ma il Salva resta.
+    const rifiutoConSalva = (async (u: string | URL | Request, i?: RequestInit) => {
+      if (String(u).endsWith("/v1/configs/webhook")) {
+        await salvaCollegamento(fonte(p.db), { percorsoSalute: "/v1/salute" });
+        p.d360.prossime.push({ stato: 400 });
+      }
+      return p.d360.fetch(u, i);
+    }) as typeof fetch;
+    assert.equal((await configuraWebhook360({ ...opz(p), fetchFn: rifiutoConSalva }, ORIGINI)).ok, false);
+    const c2 = leggiCollegamento(p.dip)!;
+    assert.equal(c2.webhookSecret, mandato, "rifiuto: il segreto è quello che 360dialog ha davvero");
+    assert.equal(c2.percorsoSalute, "/v1/salute", "il Salva in mezzo resta");
+    // Cambio di fornitore in mezzo: niente segreto di 360dialog scritto su Meta.
+    const cambio = (async (u: string | URL | Request, i?: RequestInit) => {
+      if (String(u).endsWith("/v1/configs/webhook")) await salvaCollegamento(fonte(p.db), { provider: "meta", phoneNumberId: PHONE_NUMBER_ID, token: TOKEN_META });
+      return p.d360.fetch(u, i);
+    }) as typeof fetch;
+    await configuraWebhook360({ ...opz(p), fetchFn: cambio }, ORIGINI);
+    const c3 = leggiCollegamento(p.dip)!;
+    assert.equal(c3.provider, "meta");
+    assert.equal(c3.webhookSecret, "");
+    assert.equal(c3.webhookConfigurato, 0);
+  } finally { await p.chiudi(); }
+});
+
+test("revisione: con 360dialog la firma di Meta si ignora del tutto (anche con un segreto dell'app rimasto)", async () => {
+  const { a, d360, manda } = await ambiente();
+  try {
+    await collega360(a.db);
+    const segreto = await configura({ db: a.db, d360 });
+    // Segreto dell'app rimasto nel record (per esempio da una versione vecchia): non conta.
+    scriviCollegamento({ db: a.db, cifratore }, { ...leggiCollegamento({ db: a.db, cifratore })!, appSecret: SEGRETO_APP });
+    const m1 = ricevuto({ da: MARIO, testo: "firma sbagliata" });
+    assert.equal((await manda(m1, { [INTESTAZIONE_SEGRETO]: segreto, "X-Hub-Signature-256": firma("altro", SEGRETO_APP) })).status, 200, "firma sbagliata ignorata");
+    const m2 = ricevuto({ da: MARIO, testo: "solo firma" });
+    assert.equal((await manda(m2, { "X-Hub-Signature-256": firma(JSON.stringify(m2), SEGRETO_APP) })).status, 401, "firma giusta ma senza intestazione: no");
+    assert.equal(messaggiSalvati(a.db), 1);
+  } finally { await a.chiudi(); await d360.chiudi(); }
+});
+
+test("revisione: due configurazioni incerte di fila e i messaggi arrivano lo stesso; dopo una conferma vale solo il segreto nuovo", async () => {
+  const { a, d360, manda } = await ambiente();
+  try {
+    await collega360(a.db);
+    const o = { db: a.db, cifratore, fetchFn: d360.fetch, risolvi: risolvi360 };
+    const ultimoMandato = () => (d360.richieste.at(-1)!.corpo.headers as Record<string, string>)[INTESTAZIONE_SEGRETO];
+    const s1 = await configura({ db: a.db, d360 });
+    d360.prossime.push({ stato: 500 });
+    assert.equal((await configuraWebhook360(o, ORIGINI)).ok, false);
+    const s2 = ultimoMandato();
+    d360.prossime.push({ stato: 503 });
+    assert.equal((await configuraWebhook360(o, ORIGINI)).ok, false);
+    const s3 = ultimoMandato();
+    assert.equal(leggiCollegamento({ db: a.db, cifratore })!.segretiPrecedenti.length, 2);
+    // Qualunque segreto abbia preso 360dialog, i messaggi passano.
+    for (const [i, x] of [s1, s2, s3].entries()) assert.equal((await manda(ricevuto({ da: MARIO, testo: `m${i}` }), { [INTESTAZIONE_SEGRETO]: x })).status, 200, `segreto ${i + 1}`);
+    // Conferma: solo il nuovo.
+    const s4 = await configura({ db: a.db, d360 });
+    assert.deepEqual(leggiCollegamento({ db: a.db, cifratore })!.segretiPrecedenti, []);
+    for (const x of [s1, s2, s3]) assert.equal((await manda(ricevuto({ da: MARIO }), { [INTESTAZIONE_SEGRETO]: x })).status, 401);
+    assert.equal((await manda(ricevuto({ da: MARIO, testo: "ultimo" }), { [INTESTAZIONE_SEGRETO]: s4 })).status, 200);
+  } finally { await a.chiudi(); await d360.chiudi(); }
+});
+
+test("revisione: corpo delle risposte letto con un limite (anche senza Content-Length); id degli allegati senza «..» e «/»", async () => {
+  const { leggiCorpo } = await import("../src/whatsapp/corpo.js");
+  let annullato = false;
+  const flusso = () => new ReadableStream<Uint8Array>({
+    pull(c) { c.enqueue(new Uint8Array(1024)); },
+    cancel() { annullato = true; },
+  });
+  const r = await leggiCorpo(new Response(flusso()), 10 * 1024);
+  assert.equal(r.troppo, true);
+  assert.ok(annullato, "il resto non si scarica");
+  const p = await prova();
+  try {
+    const c = leggiCollegamento(p.dip);
+    for (const id of ["..", "a..b", "a/b", "../x", ".", "-"]) await assert.rejects(scaricaMedia(c, id, { fetchFn: p.d360.fetch, risolvi: risolvi360 }), /non valido/, id);
+    assert.equal(p.d360.richieste.length, 0);
+    // File senza dimensione dichiarata e infinito: fermato al limite.
+    const infinito = (async (u: string | URL | Request, i?: RequestInit) => {
+      if (String(u).includes("/whatsapp_business/")) return new Response(flusso(), { status: 200 });
+      return p.d360.fetch(u, i);
+    }) as typeof fetch;
+    p.d360.prossime.push({ corpo: { url: "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=X1", mime_type: "application/pdf" } });
+    await assert.rejects(scaricaMedia(c, "X1", { fetchFn: infinito, risolvi: risolvi360, maxByte: 64 * 1024 }), /troppo grande/);
+  } finally { await p.chiudi(); }
 });

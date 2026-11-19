@@ -60,9 +60,11 @@ export interface CollegamentoWa {
    * 360dialog lo rimanda in ogni webhook nell'intestazione X-Jarvis-Segreto. Luigi non lo vede mai.
    */
   webhookSecret: string;
-  /** Il segreto precedente vale ancora fino a questo momento (cambio in corso), poi mai più. */
-  webhookSecretPrecedente: string;
-  precedenteFino: number;
+  /**
+   * Segreti precedenti ancora validi per poco (al massimo 2, un'ora ciascuno). Ci sono SOLO dopo un cambio con esito
+   * incerto (non si sa se 360dialog ha preso il nuovo); dopo un cambio confermato si svuota subito.
+   */
+  segretiPrecedenti: Array<{ segreto: string; fino: number }>;
   /** Quando Jarvis ha configurato il webhook su 360dialog (0 = mai). */
   webhookConfigurato: number;
   /** [non verificato] Percorso della prova di collegamento su 360dialog (di serie /health_status). */
@@ -153,6 +155,15 @@ export interface RispostaWa {
 export class ErroreWhatsapp extends Error {
   constructor(messaggio: string, readonly stato = 400) { super(messaggio); }
 }
+
+/**
+ * Errore 131060 di WhatsApp (coesistenza): il messaggio non arriverà a quel contatto (primo messaggio a un contatto nuovo,
+ * dispositivo non supportato). Non si riprova: né Jarvis né un pulsante «manda di nuovo».
+ */
+export class NonConsegnabile extends ErroreWhatsapp {
+  constructor(messaggio: string) { super(messaggio, 422); }
+}
+export const CODICE_NON_CONSEGNABILE = 131060;
 
 /** Invio con esito incerto (tempo scaduto, errore 5xx): il messaggio potrebbe essere partito. Mai ripetere da soli. */
 export class InvioIncerto extends ErroreWhatsapp {

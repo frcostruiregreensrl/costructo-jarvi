@@ -197,25 +197,32 @@ Ogni punto ha un test in `test/360dialog.test.ts` (con il 360dialog finto `test/
 | Meta diretto | firma `X-Hub-Signature-256` (HMAC-SHA256 del corpo grezzo con il segreto dell'app) | segreto dell'app + parola di verifica |
 | 360dialog | intestazione `X-Jarvis-Segreto` uguale al segreto scritto da Jarvis su 360dialog | segreto dell'intestazione presente |
 
-- Mai uno al posto dell'altro: con Meta l'intestazione segreta non basta; con 360dialog la firma di Meta da sola non basta
-  (se arriva anche la firma e il segreto dell'app è impostato, deve essere giusta anche quella).
+- Mai uno al posto dell'altro: con Meta l'intestazione segreta non basta; con 360dialog conta **solo** l'intestazione
+  (un'eventuale firma di Meta si ignora del tutto: né basta né blocca).
 - Confronti a tempo costante (impronte SHA-256 + `timingSafeEqual`). Un'intestazione ripetuta due volte si rifiuta.
 - **Cambiare fornitore non apre mai il webhook**: il segreto dell'intestazione si cancella quando cambiano fornitore o indirizzo,
-  e il webhook resta spento (404) finché Jarvis non lo riconfigura; passando a Meta servono di nuovo segreto dell'app e parola di verifica.
+  e il webhook resta spento (404) finché Jarvis non lo riconfigura; cambiando fornitore si cancellano anche segreto dell'app e
+  parola di verifica di Meta (passando a Meta vanno riscritti).
+- Se il collegamento viene tolto mentre arriva un messaggio, quel messaggio riceve 404 e non viene elaborato.
 - Restano: controllo Host (421), limite di 2 MB, 600 richieste al minuto per IP, blocco dopo 20 controlli sbagliati in 15 minuti.
 
 ### Segreto dell'intestazione
 - 32 byte casuali (`randomBytes`), generati da Jarvis quando Luigi preme «Configura il webhook su 360dialog»; cifrato nel segreto
   `whatsapp` insieme alla chiave API. **Mai** restituito al browser (solo «impostato sì/no»), mai nel registro, mai nei messaggi.
 - Jarvis lo manda solo a 360dialog (`POST {indirizzo}/v1/configs/webhook`, con la chiave `D360-API-KEY`, senza reindirizzamenti).
-- Rifiuto sicuro di 360dialog → si torna al segreto di prima; esito incerto → vale il nuovo e il vecchio **per un'ora sola**.
+- Rifiuto sicuro di 360dialog → si torna al segreto di prima; conferma → vale **solo** il nuovo (i vecchi si cancellano subito);
+  esito incerto → valgono il nuovo e al massimo **2** vecchi, ognuno per **un'ora sola**. Una configurazione alla volta; ogni
+  scrittura è «solo se niente è cambiato nel frattempo», così il segreto salvato è sempre quello che ha 360dialog.
+- Un'intestazione ripetuta (anche unita con «, » da HTTP) si rifiuta.
 - Indirizzo del webhook: solo https, niente «_», niente porta, niente credenziali o parametri; altrimenti nessuna chiamata.
 
 ### Chiave API e chiamate verso 360dialog
 - La chiave va solo all'indirizzo configurato (https, porta 443, nome pubblico, controllato anche con il DNS a ogni chiamata),
   sempre con `redirect: "error"` e tempo massimo.
 - Allegati: la chiave va solo a 360dialog. Un url di Meta si chiede sullo stesso percorso ma a 360dialog; un url di un altro
-  server si rifiuta. Dimensioni massime come prima.
+  server si rifiuta. Dimensioni massime come prima, controllate anche **mentre** si scarica (lettura a pezzi, ci si ferma al limite).
+  Id degli allegati senza «..» e senza «/».
+- Risposte di Meta e 360dialog lette al massimo per 64 KB.
 - Prova di collegamento e sincronizzazione: solo con un pulsante di Luigi; la sincronizzazione chiede `{conferma: true}` e
   non si ripete dopo un esito positivo (anche con due clic insieme ne parte una sola).
 
@@ -223,7 +230,8 @@ Ogni punto ha un test in `test/360dialog.test.ts` (con il 360dialog finto `test/
 - Ogni invio di Jarvis (risposte confermate, conferme automatiche, modelli) passa dal **tetto mensile** (di serie 900): al tetto
   non parte nessuna richiesta. Rifiuto sicuro → non contato; esito incerto → contato. I messaggi dal telefono non c'entrano.
 - Al massimo **20 messaggi al secondo** (in coda, in ordine).
-- Errore 131060: spiegato in italiano, nessun nuovo tentativo.
+- Errore 131060: spiegato in italiano, nessun nuovo tentativo, la risposta si chiude (non si rimanda dalla pagina) ed esce dal tetto.
+- Modello bloccato dal tetto: non parte e il promemoria preparato non si consuma.
 - Notifiche di collegamento interrotto: testo fisso, mai numeri o nomi.
 
 ## Cosa resta aperto (da valutare)

@@ -14,12 +14,13 @@ import type { Cifratore } from "../sicurezza/cifra.js";
 import type { RisolviNome } from "../calendario.js";
 import { registra } from "../registro.js";
 import {
-  BASE_META, INTESTAZIONE_SEGRETO, DURATA_PRECEDENTE_MS, controllaFornitoreInRete, controllaUrlWebhook, indirizzoWebhook,
-  leggiCollegamento, nuovoSegretoWebhook, scriviCollegamento,
+  BASE_META, INTESTAZIONE_SEGRETO, DURATA_PRECEDENTE_MS, MAX_PRECEDENTI, aggiornaSe, controllaFornitoreInRete, controllaUrlWebhook,
+  indirizzoWebhook, leggiCollegamento, nuovoSegretoWebhook,
 } from "./collegamento.js";
 import { intestazioniInvio } from "./invio.js";
+import { leggiTesto } from "./corpo.js";
 import { spiegaErroreMeta } from "./elabora.js";
-import { leggiConnessione, leggiSync, scriviPasso, syncFatta, type PassoSync, type StatoSync } from "./connessione.js";
+import { assicuraDaCollegamento, leggiSync, scriviPasso, segnaCoesistenza, syncFatta, type PassoSync, type StatoSync } from "./connessione.js";
 import { ErroreWhatsapp, type CollegamentoWa } from "./tipi.js";
 
 export interface OpzioniFornitore {
@@ -46,7 +47,8 @@ async function chiama(o: OpzioniFornitore, c: CollegamentoWa, url: string, metod
     if (PRIMA_DI_PARTIRE.test(String(x?.cause?.code ?? x?.code ?? ""))) throw new ReteNonRaggiunta();
     throw new ReteIncerta();
   }
-  const grezzo = (await r.text().catch(() => "")).slice(0, 64 * 1024);
+  // Al massimo 64 KB: oltre, la risposta non si legge (e vale come «non leggibile»).
+  const grezzo = await leggiTesto(r, 64 * 1024);
   let dati: Record<string, unknown> = {};
   try { const j = JSON.parse(grezzo); if (j && typeof j === "object") dati = j as Record<string, unknown>; } catch { /* non JSON */ }
   return { stato: r.status, dati };
@@ -65,51 +67,70 @@ function richiedi360(c: CollegamentoWa | null): asserts c is CollegamentoWa {
 // ---------------------------------------------------------------- 1) webhook su 360dialog
 export interface EsitoOperazione { ok: boolean; messaggio: string }
 
+const configurazioneInCorso = new WeakSet<Db>();
+
+/**
+ * Segreti, passo per passo (il segreto salvato deve essere sempre quello che ha 360dialog):
+ *  - prima della chiamata il segreto nuovo diventa quello attuale e l'attuale va tra i «precedenti» (un'ora);
+ *  - 360dialog conferma → i precedenti si cancellano SUBITO (vale solo il nuovo);
+ *  - 360dialog rifiuta di sicuro → si torna esattamente a prima;
+ *  - esito incerto → restano il nuovo e fino a 2 precedenti, ognuno per un'ora (due tentativi incerti di fila non
+ *    bloccano i messaggi, qualunque segreto abbia preso 360dialog).
+ * Ogni scrittura è «compare-and-set»: si scrive solo se nel frattempo nessuno ha cambiato fornitore, indirizzo o segreto
+ * (un «Salva» fatto in mezzo non viene annullato). Un solo «Configura» alla volta.
+ */
 export async function configuraWebhook360(o: OpzioniFornitore, origini: string[]): Promise<EsitoOperazione> {
   const c = leggiCollegamento(o);
   richiedi360(c);
   const url = controllaUrlWebhook(indirizzoWebhook(origini));
   const base = await controllaFornitoreInRete(c.baseUrl, o.risolvi);
-  const ora = o.ora?.() ?? Date.now();
-  const segreto = nuovoSegretoWebhook();
-  // Il segreto nuovo si salva PRIMA della chiamata (così i primi webhook con il segreto nuovo passano); il vecchio
-  // vale ancora un'ora. Se 360dialog dice sicuramente di no, si torna come prima.
-  const conNuovo: CollegamentoWa = {
-    ...c, webhookSecret: segreto,
-    webhookSecretPrecedente: c.webhookSecret, precedenteFino: c.webhookSecret ? ora + DURATA_PRECEDENTE_MS : 0,
-  };
-  scriviCollegamento(o, conNuovo);
-  const torna = () => scriviCollegamento(o, c);
-  let r: RispostaHttp;
+  if (configurazioneInCorso.has(o.db)) throw new ErroreWhatsapp("La configurazione del webhook è già in corso: aspetta qualche secondo.", 409);
+  configurazioneInCorso.add(o.db);
   try {
-    r = await chiama(o, c, `${base}/v1/configs/webhook`, "POST", { url, headers: { [INTESTAZIONE_SEGRETO]: segreto } });
-  } catch (e) {
-    if (e instanceof ReteNonRaggiunta) {
-      torna();
-      registra(o.db, "whatsapp.webhook360", "errore", "luigi", { motivo: "360dialog non raggiungibile" });
-      return { ok: false, messaggio: "360dialog non risponde (rete). Non ho cambiato niente: riprova più tardi." };
+    const ora = o.ora?.() ?? Date.now();
+    const segreto = nuovoSegretoWebhook();
+    const stessoPosto = (x: CollegamentoWa | null) => !!x && x.provider === "360dialog" && x.baseUrl === c.baseUrl;
+    let prima: Pick<CollegamentoWa, "webhookSecret" | "segretiPrecedenti"> = { webhookSecret: "", segretiPrecedenti: [] };
+    const scritto = aggiornaSe(o, (x) => stessoPosto(x) && x!.token === c.token, (x) => {
+      prima = { webhookSecret: x.webhookSecret, segretiPrecedenti: x.segretiPrecedenti };
+      const vecchi = [...(x.webhookSecret ? [{ segreto: x.webhookSecret, fino: ora + DURATA_PRECEDENTE_MS }] : []), ...x.segretiPrecedenti.filter((p) => p.fino > ora)];
+      return { ...x, webhookSecret: segreto, segretiPrecedenti: vecchi.slice(0, MAX_PRECEDENTI) };
+    });
+    if (!scritto) throw new ErroreWhatsapp("Il collegamento è cambiato in questo momento: riprova.", 409);
+    // Le scritture dopo la chiamata valgono solo se il segreto salvato è ancora il nostro.
+    const ancoraMio = (x: CollegamentoWa | null) => stessoPosto(x) && x!.webhookSecret === segreto;
+    const torna = () => aggiornaSe(o, ancoraMio, (x) => ({ ...x, ...prima }));
+    let r: RispostaHttp;
+    try {
+      r = await chiama(o, c, `${base}/v1/configs/webhook`, "POST", { url, headers: { [INTESTAZIONE_SEGRETO]: segreto } });
+    } catch (e) {
+      if (e instanceof ReteNonRaggiunta) {
+        torna();
+        registra(o.db, "whatsapp.webhook360", "errore", "luigi", { motivo: "360dialog non raggiungibile" });
+        return { ok: false, messaggio: "360dialog non risponde (rete). Non ho cambiato niente: riprova più tardi." };
+      }
+      registra(o.db, "whatsapp.webhook360", "errore", "luigi", { motivo: "esito incerto" });
+      return { ok: false, messaggio: "360dialog non ha risposto in tempo: non so se ha salvato. Riprova tra qualche minuto (non fa danni)." };
     }
-    registra(o.db, "whatsapp.webhook360", "errore", "luigi", { motivo: "esito incerto" });
-    return { ok: false, messaggio: "360dialog non ha risposto in tempo: non so se ha salvato. Riprova tra qualche minuto (non fa danni)." };
-  }
-  if (r.stato >= 200 && r.stato < 300) {
-    scriviCollegamento(o, { ...conNuovo, webhookConfigurato: ora });
-    registra(o.db, "whatsapp.webhook360", "fatto", "luigi", { operazione: "webhook configurato su 360dialog" });
-    return { ok: true, messaggio: "Fatto: 360dialog ora manda i messaggi a Jarvis, con l'intestazione segreta. Il segreto non lo vedi: lo tiene Jarvis." };
-  }
-  if (r.stato >= 500) {
-    registra(o.db, "whatsapp.webhook360", "errore", "luigi", { motivo: `esito incerto (${r.stato})` });
-    return { ok: false, messaggio: `360dialog ha avuto un problema (${r.stato}): non so se ha salvato. Riprova tra qualche minuto.` };
-  }
-  torna();
-  registra(o.db, "whatsapp.webhook360", "errore", "luigi", { motivo: `rifiutato (${r.stato})` });
-  const { testo } = codiceErrore(r.dati);
-  return {
-    ok: false,
-    messaggio: r.stato === 401 || r.stato === 403
-      ? "360dialog non accetta la chiave API: controllala e salvala di nuovo. Non ho cambiato niente."
-      : `360dialog ha rifiutato la configurazione (${r.stato})${testo ? `: ${testo.slice(0, 120)}` : ""}. Non ho cambiato niente.`,
-  };
+    if (r.stato >= 200 && r.stato < 300) {
+      aggiornaSe(o, ancoraMio, (x) => ({ ...x, segretiPrecedenti: [], webhookConfigurato: ora }));
+      registra(o.db, "whatsapp.webhook360", "fatto", "luigi", { operazione: "webhook configurato su 360dialog" });
+      return { ok: true, messaggio: "Fatto: 360dialog ora manda i messaggi a Jarvis, con l'intestazione segreta. Il segreto non lo vedi: lo tiene Jarvis." };
+    }
+    if (r.stato >= 500) {
+      registra(o.db, "whatsapp.webhook360", "errore", "luigi", { motivo: `esito incerto (${r.stato})` });
+      return { ok: false, messaggio: `360dialog ha avuto un problema (${r.stato}): non so se ha salvato. Riprova tra qualche minuto.` };
+    }
+    torna();
+    registra(o.db, "whatsapp.webhook360", "errore", "luigi", { motivo: `rifiutato (${r.stato})` });
+    const { testo } = codiceErrore(r.dati);
+    return {
+      ok: false,
+      messaggio: r.stato === 401 || r.stato === 403
+        ? "360dialog non accetta la chiave API: controllala e salvala di nuovo. Non ho cambiato niente."
+        : `360dialog ha rifiutato la configurazione (${r.stato})${testo ? `: ${testo.slice(0, 120)}` : ""}. Non ho cambiato niente.`,
+    };
+  } finally { configurazioneInCorso.delete(o.db); }
 }
 
 // ---------------------------------------------------------------- 2) prova del collegamento
@@ -126,6 +147,8 @@ export async function provaCollegamento(o: OpzioniFornitore): Promise<EsitoProva
       if (r.stato < 200 || r.stato >= 300) { const e = codiceErrore(r.dati); return no(spiegaErroreMeta(e.codice ?? (r.stato === 401 ? 190 : undefined), e.testo)); }
       const app = r.dati.is_on_biz_app === true, tipo = String(r.dati.platform_type ?? "");
       const dettagli = { appWhatsappBusiness: app, piattaforma: tipo.slice(0, 40) };
+      // Serve al promemoria dei 14 giorni: vale solo per i numeri in coesistenza.
+      segnaCoesistenza(o, app && tipo === "CLOUD_API");
       if (app && tipo === "CLOUD_API") return { ok: true, messaggio: "Collegamento a posto: il numero usa l'app WhatsApp Business ed è collegato a Jarvis (coesistenza attiva).", dettagli };
       return { ok: false, messaggio: !app ? "Meta dice che il numero non usa l'app WhatsApp Business in coesistenza." : `Meta dice che il numero non è sulla Cloud API (${tipo || "sconosciuto"}).`, dettagli };
     }
@@ -159,6 +182,8 @@ export async function sincronizzaChat(o: OpzioniFornitore): Promise<EsitoSync> {
   if (inCorso.has(o.db)) throw new ErroreWhatsapp("La sincronizzazione è già in corso.", 409);
   inCorso.add(o.db);
   try {
+    // Installazioni della parte 1 o sincronizzazione prima di un «Salva»: la scheda si crea qui (senza azzerare niente).
+    const conn = assicuraDaCollegamento(o);
     const url = c.provider === "meta"
       ? `${BASE_META}/${encodeURIComponent(c.versione)}/${encodeURIComponent(c.phoneNumberId)}/smb_app_data`
       : `${await controllaFornitoreInRete(c.baseUrl, o.risolvi)}${c.percorsoSync}`;
@@ -179,7 +204,6 @@ export async function sincronizzaChat(o: OpzioniFornitore): Promise<EsitoSync> {
       if (esito.stato !== "fatto") break; // prima i contatti, poi lo storico: se il primo non va, il secondo aspetta
     }
     const sync = leggiSync(o.db);
-    const conn = leggiConnessione(o.db);
     const tardi = conn && (o.ora?.() ?? Date.now()) - conn.collegatoIl > 24 * 3600_000;
     if (syncFatta(sync)) return { ok: true, messaggio: "Sincronizzazione chiesta: contatti e storico arriveranno a Jarvis nei prossimi minuti (o ore). Non va più ripetuta.", sync };
     return {

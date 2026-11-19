@@ -264,7 +264,7 @@
           <h2 id="titoloSpesaWa">WhatsApp: messaggi mandati da Jarvis</h2>
           <p class="cifra"><b id="spesaWaInviati">—</b> <span>su un tetto di <b id="spesaWaTetto">—</b></span></p>
           <p id="spesaWaNota" class="sotto"></p>
-          <p class="aiuto">Stima: i primi 1.000 messaggi del mese sono gratis, poi circa <span id="spesaWaPrezzo">0,0248 €</span> l'uno. Il conto vero lo fa Meta (tramite 360dialog). Le risposte che scrivi tu dal telefono sono gratis e non si contano.</p>
+          <p class="aiuto">Stima: le prime 1.000 risposte del mese sono gratis, poi circa <span id="spesaWaPrezzo">0,0248 €</span> l'una; i modelli si pagano sempre (circa <span id="spesaWaPrezzoModello">0,03 €</span> l'uno). Il conto vero lo fa Meta (tramite 360dialog). Le risposte che scrivi tu dal telefono sono gratis e non si contano.</p>
         </div>
         <p class="sotto">Cifre stimate dal listino Anthropic (dollari). Claude Haiku 5.5 è il modello di tutti i giorni; Claude Sonnet 5.5 parte solo se dici «pensaci bene». Calcoli, briefing e frasi rapide non costano niente.</p>
       </section>
@@ -498,7 +498,10 @@
             <label>Prezzo stimato di un messaggio oltre i 1.000 gratuiti (euro)
               <input id="waPrezzoMessaggio" type="number" min="0" max="1" step="0.0001" inputmode="decimal">
             </label>
-            <p class="aiuto">Da ottobre 2026 Meta fa pagare anche le risposte oltre le prime 1.000 del mese. Al tetto Jarvis non manda più niente da solo. <b>Le risposte che scrivi tu dal telefono sono gratis</b> e non sono mai bloccate.</p>
+            <label>Prezzo stimato di un modello di Meta (euro, si paga sempre)
+              <input id="waPrezzoModello" type="number" min="0" max="1" step="0.0001" inputmode="decimal">
+            </label>
+            <p class="aiuto">Da ottobre 2026 Meta fa pagare anche le risposte oltre le prime 1.000 del mese; i modelli si pagano sempre, a parte. Al tetto Jarvis non manda più niente da solo. <b>Le risposte che scrivi tu dal telefono sono gratis</b> e non sono mai bloccate.</p>
             <button id="waSalvaTetto" class="secondario" type="button">Salva tetto e prezzo</button>
             <p id="esitoWaTetto" class="esito" role="status" aria-live="polite"></p>
           </fieldset>

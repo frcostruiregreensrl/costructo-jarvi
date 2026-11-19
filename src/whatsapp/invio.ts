@@ -11,7 +11,8 @@ import type { RisolviNome } from "../calendario.js";
 import { BASE_META, INTESTAZIONE_360, controllaFornitoreInRete } from "./collegamento.js";
 import { spiegaErroreMeta } from "./elabora.js";
 import { limitatoreWhatsapp, prenotaInvio, type ContatoreInvio, type Limitatore } from "./contatore.js";
-import { ErroreWhatsapp, InvioIncerto, MAX_TESTO_RISPOSTA, type CollegamentoWa } from "./tipi.js";
+import { leggiTesto } from "./corpo.js";
+import { CODICE_NON_CONSEGNABILE, ErroreWhatsapp, InvioIncerto, NonConsegnabile, MAX_TESTO_RISPOSTA, type CollegamentoWa } from "./tipi.js";
 
 export interface Destinatario { waId: string; userId: string }
 export interface OpzioniInvio {
@@ -137,7 +138,7 @@ async function mandaConTentativi(c: CollegamentoWa, corpoJson: Record<string, un
       if (PRIMA_DI_PARTIRE.test(codiceRete(e))) { ultimo = "WhatsApp non risponde in questo momento (rete)."; continue; }
       throw new InvioIncerto();
     }
-    const grezzo = (await r.text().catch(() => "")).slice(0, MAX_RISPOSTA_BYTE);
+    const grezzo = await leggiTesto(r, MAX_RISPOSTA_BYTE);
     let dati: { messages?: Array<{ id?: unknown }>; error?: { code?: number; message?: string; error_data?: { details?: string } } } = {};
     try { dati = JSON.parse(grezzo); } catch { /* risposta non JSON */ }
     if (r.ok) {
@@ -147,6 +148,8 @@ async function mandaConTentativi(c: CollegamentoWa, corpoJson: Record<string, un
     }
     if (r.status === 401 || r.status === 403) throw new ErroreWhatsapp(spiegaErroreMeta(dati.error?.code ?? 190));
     ultimo = dati.error ? spiegaErroreMeta(dati.error.code, dati.error.message) : `WhatsApp ha risposto con un errore (${r.status}).`;
+    // 131060: il messaggio non arriverà a quel contatto. Mai ripetere (né qui né con un pulsante).
+    if (dati.error?.code === CODICE_NON_CONSEGNABILE) throw new NonConsegnabile(ultimo);
     if (r.status >= 500) throw new InvioIncerto();
     if (r.status !== 429) throw new ErroreWhatsapp(ultimo);
   }

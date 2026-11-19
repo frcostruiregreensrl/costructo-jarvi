@@ -6,7 +6,8 @@
 // Come si controlla il webhook, fornitore per fornitore (parte 2):
 //   meta      → firma X-Hub-Signature-256 OBBLIGATORIA (segreto dell'app + parola di verifica).
 //   360dialog → intestazione segreta X-Jarvis-Segreto OBBLIGATORIA (la sceglie Jarvis e la scrive lui su 360dialog).
-//               Se arriva anche una firma di Meta e il segreto dell'app è impostato, deve essere giusta anche quella.
+//               Un'eventuale firma di Meta si ignora del tutto: conta solo l'intestazione.
+// Cambiando fornitore si cancellano anche segreto dell'app e parola di verifica di Meta (vanno riscritti se si torna a Meta).
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { Db } from "../db.js";
@@ -28,8 +29,9 @@ export const INTESTAZIONE_SEGRETO = "X-Jarvis-Segreto";
 export const PERCORSO_SALUTE_360 = "/health_status";
 export const PERCORSO_SYNC_360 = "/smb_app_data";
 export const PERCORSO_WEBHOOK = "/api/whatsapp/webhook";
-/** Dopo un nuovo segreto, il vecchio vale ancora un'ora (il cambio su 360dialog non è istantaneo). */
+/** Dopo un cambio di segreto con esito INCERTO, il vecchio vale ancora un'ora (al massimo 2 vecchi insieme). */
 export const DURATA_PRECEDENTE_MS = 3600_000;
+export const MAX_PRECEDENTI = 2;
 
 interface Fonte { db: Db; cifratore: Cifratore }
 
@@ -43,8 +45,7 @@ const SchemaSalvato = z.object({
   appSecret: z.string().max(200).catch(""),
   verifyToken: z.string().max(200).catch(""),
   webhookSecret: z.string().max(200).catch(""),
-  webhookSecretPrecedente: z.string().max(200).catch(""),
-  precedenteFino: z.number().catch(0),
+  segretiPrecedenti: z.array(z.object({ segreto: z.string().min(1).max(200), fino: z.number() })).max(MAX_PRECEDENTI).catch([]),
   webhookConfigurato: z.number().catch(0),
   percorsoSalute: z.string().max(120).catch(PERCORSO_SALUTE_360),
   percorsoSync: z.string().max(120).catch(PERCORSO_SYNC_360),
@@ -212,8 +213,10 @@ export async function salvaCollegamento(f: Fonte & { risolvi?: RisolviNome }, m:
   const token = m.token ? m.token : prima?.token ?? "";
   if (cambiaDestinazione && !m.token && token) throw new ErroreWhatsapp("Hai cambiato fornitore o indirizzo: riscrivi il token o la chiave API.");
   if (token && /[\s\u0000-\u001f]/.test(token)) throw new ErroreWhatsapp("Il token non deve contenere spazi.");
-  const appSecret = m.appSecret ? m.appSecret : prima?.appSecret ?? "";
-  const verifyToken = m.verifyToken ? m.verifyToken : prima?.verifyToken ?? "";
+  // Segreto dell'app e parola di verifica valgono per Meta: cambiando fornitore si cancellano (vanno riscritti).
+  const cambiaFornitore = !!prima && prima.provider !== provider;
+  const appSecret = m.appSecret ? m.appSecret : cambiaFornitore ? "" : prima?.appSecret ?? "";
+  const verifyToken = m.verifyToken ? m.verifyToken : cambiaFornitore ? "" : prima?.verifyToken ?? "";
   if (m.verifyToken && m.verifyToken.length < 12) throw new ErroreWhatsapp("La parola di verifica deve avere almeno 12 caratteri.");
   if (m.appSecret && !/^[A-Za-z0-9]{16,200}$/.test(m.appSecret)) throw new ErroreWhatsapp("Il segreto dell'app di Meta è fatto di lettere e cifre (almeno 16).");
   // Il segreto del webhook di 360dialog vale solo per quel fornitore e quell'indirizzo: se cambia uno dei due si cancella
@@ -222,8 +225,7 @@ export async function salvaCollegamento(f: Fonte & { risolvi?: RisolviNome }, m:
   const c: CollegamentoWa = {
     provider, baseUrl, versione, phoneNumberId, token, appSecret, verifyToken,
     webhookSecret: tieniSegreto ? prima.webhookSecret : "",
-    webhookSecretPrecedente: tieniSegreto ? prima.webhookSecretPrecedente : "",
-    precedenteFino: tieniSegreto ? prima.precedenteFino : 0,
+    segretiPrecedenti: tieniSegreto ? prima.segretiPrecedenti : [],
     webhookConfigurato: tieniSegreto ? prima.webhookConfigurato : 0,
     percorsoSalute: m.percorsoSalute !== undefined ? (m.percorsoSalute || PERCORSO_SALUTE_360) : prima?.percorsoSalute || PERCORSO_SALUTE_360,
     percorsoSync: m.percorsoSync !== undefined ? (m.percorsoSync || PERCORSO_SYNC_360) : prima?.percorsoSync || PERCORSO_SYNC_360,
@@ -235,6 +237,18 @@ export async function salvaCollegamento(f: Fonte & { risolvi?: RisolviNome }, m:
 /** Scrive il collegamento così com'è (già controllato). */
 export function scriviCollegamento(f: Fonte, c: CollegamentoWa): void {
   salvaSegreto(f.db, f.cifratore, "whatsapp", JSON.stringify(c));
+}
+
+/**
+ * Scrittura «se non è cambiato niente» (compare-and-set): rilegge il collegamento e scrive solo se `condizione` è vera
+ * sul valore di adesso. Lettura e scrittura sono una dopo l'altra senza attese (better-sqlite3 è sincrono), quindi nessun
+ * altro salvataggio può infilarsi in mezzo. Restituisce true se ha scritto.
+ */
+export function aggiornaSe(f: Fonte, condizione: (adesso: CollegamentoWa | null) => boolean, modifica: (adesso: CollegamentoWa) => CollegamentoWa): boolean {
+  const adesso = leggiCollegamento(f);
+  if (!adesso || !condizione(adesso)) return false;
+  scriviCollegamento(f, modifica(adesso));
+  return true;
 }
 
 export function scollega(f: Fonte): void {

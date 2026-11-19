@@ -49,6 +49,8 @@ export const SchemaImpostazioni = z.object({
   whatsappTettoMessaggiMese: z.number().int().min(0).max(100_000).default(900),
   /** Prezzo stimato di un messaggio oltre i 1.000 gratuiti del mese (euro). È una stima: il conto vero lo fa Meta. */
   whatsappPrezzoMessaggioEur: z.number().min(0).max(1).default(0.0248),
+  /** Prezzo stimato di un modello di Meta (si paga sempre, fuori dalle 1.000 risposte gratuite). Stima da verificare. */
+  whatsappPrezzoModelloEur: z.number().min(0).max(1).default(0.03),
 });
 export type Impostazioni = z.infer<typeof SchemaImpostazioni>;
 

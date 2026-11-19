@@ -431,6 +431,7 @@ async function caricaSpesa() {
       $("#spesaWaInviati").textContent = String(w.inviati);
       $("#spesaWaTetto").textContent = String(w.tetto);
       $("#spesaWaPrezzo").textContent = euro(w.prezzoEur);
+      $("#spesaWaPrezzoModello").textContent = euro(w.prezzoModelloEur);
       $("#spesaWaNota").textContent = `${w.mese} · risposte ${w.perTipo.risposta}, conferme automatiche ${w.perTipo.conferma}, modelli ${w.perTipo.modello} · costo stimato ${euro(w.stimaEur)}${w.raggiunto ? " · tetto raggiunto: Jarvis non manda più messaggi da solo fino al mese prossimo (tu puoi sempre rispondere dal telefono)." : "."}`;
     }
     const corpo = $("#spesaModelli");
@@ -1129,7 +1130,7 @@ function disegnaWaImpostazioni(d) {
   conn.className = c && c.stato === "interrotto" ? "avviso-forte" : "aiuto";
   conn.textContent = !c ? "" : c.stato === "interrotto"
     ? `Il collegamento WhatsApp si è interrotto${c.evento ? ` (${NOMI_EVENTI_WA[c.evento] || c.evento}, ${quandoWa(c.quando)})` : ""}: apri WhatsApp Business sul telefono.`
-    : `Collegato il ${quandoWa(c.collegatoIl)}.${c.ultimaAttivita ? ` Ultimo messaggio arrivato: ${quandoWa(c.ultimaAttivita)}.` : " Nessun messaggio ancora arrivato."}${c.evento ? ` Ultimo evento: ${NOMI_EVENTI_WA[c.evento] || c.evento} (${quandoWa(c.quando)}).` : ""}`;
+    : `Collegato il ${quandoWa(c.collegatoIl)}.${c.ultimaAttivita ? ` Ultimo messaggio arrivato: ${quandoWa(c.ultimaAttivita)}.` : " Nessun messaggio ancora arrivato."}${c.ultimaEco ? ` Ultimo messaggio scritto da te sul telefono: ${quandoWa(c.ultimaEco)}.` : ""}${c.evento ? ` Ultimo evento: ${NOMI_EVENTI_WA[c.evento] || c.evento} (${quandoWa(c.quando)}).` : ""}`;
   const s = d.sync || {};
   const passo = (p, nome) => (p?.stato === "fatto" ? `${nome}: fatto il ${quandoWa(p.quando)}` : p?.stato && p.stato !== "mai" ? `${nome}: ${p.stato === "incerto" ? "esito incerto" : "non riuscito"} (${p.esito})` : `${nome}: da fare`);
   $("#waStatoSync").textContent = s.fatta
@@ -1142,6 +1143,7 @@ function disegnaWaImpostazioni(d) {
     $("#waInviiTetto").textContent = String(inv.tetto);
     if (document.activeElement !== $("#waTettoMessaggi")) $("#waTettoMessaggi").value = String(inv.tetto);
     if (document.activeElement !== $("#waPrezzoMessaggio")) $("#waPrezzoMessaggio").value = String(inv.prezzoEur);
+    if (document.activeElement !== $("#waPrezzoModello")) $("#waPrezzoModello").value = String(inv.prezzoModelloEur);
   }
   $("#waConferme").checked = !!d.confermeAutomatiche;
   $("#waNascondi").checked = !!d.nascondiContenuto;
@@ -1197,10 +1199,10 @@ $("#waSincronizza").addEventListener("click", (e) => {
 });
 $("#waSalvaTetto").addEventListener("click", async () => {
   const esito = $("#esitoWaTetto");
-  const tetto = Number($("#waTettoMessaggi").value), prezzo = Number($("#waPrezzoMessaggio").value);
-  if (!Number.isInteger(tetto) || tetto < 0 || !(prezzo >= 0 && prezzo <= 1)) { esito.className = "esito male"; esito.textContent = "Scrivi un tetto (numero intero) e un prezzo tra 0 e 1 euro."; return; }
+  const tetto = Number($("#waTettoMessaggi").value), prezzo = Number($("#waPrezzoMessaggio").value), prezzoModello = Number($("#waPrezzoModello").value);
+  if (!Number.isInteger(tetto) || tetto < 0 || !(prezzo >= 0 && prezzo <= 1) || !(prezzoModello >= 0 && prezzoModello <= 1)) { esito.className = "esito male"; esito.textContent = "Scrivi un tetto (numero intero) e un prezzo tra 0 e 1 euro."; return; }
   try {
-    await api("/api/impostazioni", { metodo: "PUT", corpo: { whatsappTettoMessaggiMese: tetto, whatsappPrezzoMessaggioEur: prezzo } });
+    await api("/api/impostazioni", { metodo: "PUT", corpo: { whatsappTettoMessaggiMese: tetto, whatsappPrezzoMessaggioEur: prezzo, whatsappPrezzoModelloEur: prezzoModello } });
     esito.className = "esito"; esito.textContent = `Salvato: al massimo ${tetto} messaggi di Jarvis al mese.`;
     await caricaWaImpostazioni();
   } catch (err) { if (err instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = err.message; }
