@@ -41,6 +41,16 @@ export const SchemaImpostazioni = z.object({
   giorniPreventiviInAttesa: z.number().int().min(1).max(90).default(7),
   /** Modelli approvati da Meta per i promemoria ai clienti (parte 2). Spento: si usano solo i link wa.me. */
   whatsappModelliAttivi: z.boolean().default(false),
+  // ---- Fase 3, parte 2 (360dialog e costi)
+  /**
+   * Tetto dei messaggi che JARVIS manda con la API in un mese (risposte confermate, conferme automatiche, modelli).
+   * Al tetto Jarvis non manda più niente; il telefono di Luigi non è toccato. Di serie 900: resta sotto i 1.000 gratuiti.
+   */
+  whatsappTettoMessaggiMese: z.number().int().min(0).max(100_000).default(900),
+  /** Prezzo stimato di un messaggio oltre i 1.000 gratuiti del mese (euro). È una stima: il conto vero lo fa Meta. */
+  whatsappPrezzoMessaggioEur: z.number().min(0).max(1).default(0.0248),
+  /** Prezzo stimato di un modello di Meta (si paga sempre, fuori dalle 1.000 risposte gratuite). Stima da verificare. */
+  whatsappPrezzoModelloEur: z.number().min(0).max(1).default(0.03),
 });
 export type Impostazioni = z.infer<typeof SchemaImpostazioni>;
 

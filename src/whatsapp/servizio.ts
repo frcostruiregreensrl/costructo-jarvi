@@ -18,6 +18,8 @@ import { mandaConfermeWa } from "./rispostaAuto.js";
 import { preparaRisposta } from "./risposte.js";
 import { leggiContatto, mediaDi, nomeContatto, nomeSpazio, statoChat } from "./archivio.js";
 import { leggiCollegamento } from "./collegamento.js";
+import { rilasciaInvio } from "./contatore.js";
+import { applicaEventoAccount, assicuraDaCollegamento, segnaMessaggiInArrivo } from "./connessione.js";
 import { giroVocali, giroAllegati, giroFunzioni, type EsitoFunzioni } from "../funzioni/analisi.js";
 import { mandaAutomatiche, aggiornaStatiProposte, recuperaBloccate } from "../proposte/invio.js";
 import { PAUSA_NOTIFICHE_MS, PRIVATO, RAGGRUPPA_MS, type ContattoWa, type DipendenzeWhatsapp, type MessaggioWa } from "./tipi.js";
@@ -121,6 +123,8 @@ export function creaServizioWhatsapp(dip: DipendenzeWhatsapp) {
     const passo = async (nome: string, f: () => Promise<void> | void) => {
       try { await f(); } catch (err) { registra(dip.db, nome, "errore", "sistema", { motivo: String((err as Error)?.message || err).slice(0, 200) }); }
     };
+    // Parte 2: scheda del collegamento (anche per le installazioni della parte 1), per il promemoria dei 14 giorni.
+    await passo("whatsapp.collegamento", () => { assicuraDaCollegamento(dip); });
     await passo("whatsapp.azienda", async () => { e.attribuiti = await attribuisciNuovi(dip); });
     await passo("whatsapp.vocale", async () => { e.vocali = await giroVocali(dip); });
     await passo("whatsapp.allegato", async () => { e.allegati = await giroAllegati(dip); });
@@ -148,10 +152,18 @@ export function creaServizioWhatsapp(dip: DipendenzeWhatsapp) {
      * Il giro parte appena il contatto smette di scrivere (2 minuti), così i messaggi vicini si classificano insieme.
      */
     ricevi(corpo: Parameters<typeof elaboraWebhook>[1]): Promise<EsitoElaborazione | null> {
-      const lavoro = coda.then(() => {
+      const lavoro = coda.then(async () => {
         const coll = leggiCollegamento(dip);
-        const esito = elaboraWebhook(dip.db, corpo, coll?.phoneNumberId ?? "", dip.ora?.() ?? Date.now());
-        if (esito.nuovi || esito.eco || esito.storico) registra(dip.db, "whatsapp.ricevuti", "fatto", "sistema", { ...esito });
+        const ora = dip.ora?.() ?? Date.now();
+        const esito = elaboraWebhook(dip.db, corpo, coll?.phoneNumberId ?? "", ora);
+        if (esito.nuovi || esito.eco || esito.storico) {
+          const { eventiAccount: _e, nonConsegnati: _n, ...numeri } = esito;
+          registra(dip.db, "whatsapp.ricevuti", "fatto", "sistema", numeri);
+        }
+        // Parte 2: messaggi dal vivo = il collegamento lavora; eventi dell'account (scollegato, ricollegato…).
+        if (esito.nuovi || esito.eco) { assicuraDaCollegamento(dip); segnaMessaggiInArrivo(dip.db, esito.eco > 0, ora); }
+        for (const ev of esito.eventiAccount) await applicaEventoAccount(dip, ev);
+        for (const x of esito.nonConsegnati) rilasciaInvio(dip.db, dip.fuso, x.tipo, x.quando);
         if (esito.nuovi && !prossimo) {
           prossimo = setTimeout(() => { prossimo = null; servizio.giroOra().catch(() => {}); }, RAGGRUPPA_MS + 5000);
           prossimo.unref();

@@ -60,6 +60,10 @@ di sola conferma di ricezione: non contiene accettazioni o impegni.» Una confer
 
 ## Parte 2 — come si collega davvero (passo per passo, da fare con Luigi)
 
+> **Aggiornamento 19/11/2026**: Luigi ha scelto **360dialog**. L'adattamento è descritto in [FASE3-PARTE2.md](FASE3-PARTE2.md)
+> (passi aggiornati, controllo del webhook con l'intestazione segreta, sincronizzazione una volta sola, costi e tetto dei messaggi).
+> I passi qui sotto restano validi per il collegamento diretto con Meta.
+
 Ogni passo che costa o tocca account veri va **approvato da Luigi prima**.
 
 1. **Copia di sicurezza delle chat** sul telefono (WhatsApp → Impostazioni → Chat → Backup delle chat).
@@ -161,3 +165,4 @@ smb_app_state_sync, group messages, «Onboard WhatsApp Business app users», cre
 - I messaggi e i riassunti vanno a Anthropic per la classificazione (come la posta): va detto a Luigi.
 - Modelli approvati da Meta (per scrivere dopo 24 ore), costi e intestazione dell'account: decisioni di Luigi.
 - Un'eventuale seconda azienda con un secondo numero: il webhook accetta un solo `phone_number_id`.
+- Parte 2 (360dialog): fatta nel ramo `fase3c/360dialog`, vedi [FASE3-PARTE2.md](FASE3-PARTE2.md).

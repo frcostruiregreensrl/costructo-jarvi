@@ -40,6 +40,7 @@ import { creaRotteWebhook } from "./whatsapp/webhook.js";
 import { PERCORSO_WEBHOOK, collegamentoVisibile } from "./whatsapp/collegamento.js";
 import type { DipendenzeWhatsapp } from "./whatsapp/tipi.js";
 import { montaRotteWhatsapp } from "./rotteWhatsapp.js";
+import { riepilogoInviiWa } from "./whatsapp/contatore.js";
 import { montaRotteFunzioni } from "./rotteFunzioni.js";
 
 export interface OpzioniApp {
@@ -333,7 +334,11 @@ export function creaApp(o: OpzioniApp) {
   });
   app.get("/api/spesa", (_req, res) => {
     const imp = leggiImpostazioni(db);
-    res.json({ ...riepilogoMese(db, imp.tettoMensileUsd, config.fusoOrario), listino: LISTINO, modelloPredefinito: config.modelloPredefinito, modelloApprofondito: config.modelloApprofondito });
+    res.json({
+      ...riepilogoMese(db, imp.tettoMensileUsd, config.fusoOrario), listino: LISTINO, modelloPredefinito: config.modelloPredefinito, modelloApprofondito: config.modelloApprofondito,
+      // Fase 3 parte 2: messaggi mandati da Jarvis con la API di WhatsApp (stima in euro, separata dalla spesa dell'AI).
+      whatsapp: riepilogoInviiWa(db, config.fusoOrario),
+    });
   });
 
   // ------------------------------------------------------------ impostazioni e collegamenti (i segreti non tornano mai al browser)

@@ -14,6 +14,7 @@ import { inizioGiorno } from "../tempo.js";
 import { parlaDiDenaro } from "../posta/analisi.js";
 import { leggiCollegamento, invioPronto } from "./collegamento.js";
 import { mandaTesto } from "./invio.js";
+import { riepilogoInviiWa } from "./contatore.js";
 import { leggiContatto, salvaMessaggio, statoChat } from "./archivio.js";
 import { testiDi } from "./classifica.js";
 import { mascheraTelefono } from "./telefono.js";
@@ -34,6 +35,7 @@ export function valutaConfermaWa(dip: Pick<DipendenzeWhatsapp, "db" | "cifratore
   const no = (motivo: string): ValutazioneWa => ({ invia: false, motivo });
   if (!leggiImpostazioni(dip.db).whatsappConfermeAutomatiche) return no("interruttore generale spento");
   if (!invioPronto(leggiCollegamento(dip))) return no("WhatsApp non collegato per l'invio");
+  if (riepilogoInviiWa(dip.db, dip.fuso, ora).raggiunto) return no("tetto mensile dei messaggi di Jarvis raggiunto");
   if (!lista.length) return no("nessun messaggio");
   if (c.gruppo || lista.some((m) => m.gruppo_id)) return no("chat di gruppo: mai conferme");
   if (lista.some((m) => m.storico || m.direzione !== "in")) return no("messaggio dello storico");
@@ -78,7 +80,9 @@ export async function mandaConfermeWa(dip: DipendenzeWhatsapp): Promise<number> 
     for (const m of lista) segna.run("in_invio", m.id);
     const coll = leggiCollegamento(dip)!;
     try {
-      const wamid = await mandaTesto(coll, { waId: c.wa_id, userId: c.user_id }, TESTO_CONFERMA_WA, { fetchFn: dip.fetchFn, attesa: dip.attesaRiprova, risolvi: dip.risolvi });
+      const wamid = await mandaTesto(coll, { waId: c.wa_id, userId: c.user_id }, TESTO_CONFERMA_WA, {
+        fetchFn: dip.fetchFn, attesa: dip.attesaRiprova, risolvi: dip.risolvi, contatore: { db, fuso: dip.fuso, tipo: "conferma", ora },
+      });
       salvaMessaggio(db, { wamid, contattoId: c.id, direzione: "out", tipo: "text", quando: ora, testo: TESTO_CONFERMA_WA, automatico: true }, ora);
       db.prepare("INSERT INTO wa_conferme_auto (contatto_id, quando) VALUES (?,?)").run(c.id, ora);
       for (const m of lista) segna.run("inviata", m.id);

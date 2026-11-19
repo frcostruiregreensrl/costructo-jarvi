@@ -15,7 +15,7 @@ import { leggiContatto, leggiRisposta, nomeContatto, nuovoId, salvaMessaggio, st
 import { mascheraTelefono } from "./telefono.js";
 import { pulisciTestoConfermato, improntaConferma, stessaImpronta, DA_COMPLETARE } from "../sicurezza/testoConfermato.js";
 import { parlaDiPrezzi, togliPrezzi } from "../funzioni/rilevatori.js";
-import { ErroreWhatsapp, InvioIncerto, MAX_TESTO_RISPOSTA, type ContattoWa, type DipendenzeWhatsapp, type RispostaWa } from "./tipi.js";
+import { ErroreWhatsapp, InvioIncerto, NonConsegnabile, MAX_TESTO_RISPOSTA, type ContattoWa, type DipendenzeWhatsapp, type RispostaWa } from "./tipi.js";
 
 export const fuoriFinestra = (nome: string) =>
   `Sono passate più di 24 ore dall'ultimo messaggio di ${nome}: WhatsApp permette di scrivere solo con un «modello» approvato da Meta, ` +
@@ -98,7 +98,9 @@ export async function inviaRisposta(dip: DipendenzeWhatsapp, rispostaId: string,
   }
   const nome = nomeContatto(c);
   try {
-    const wamid = await mandaTesto(coll, { waId: c.wa_id, userId: c.user_id }, r.testo, { fetchFn: dip.fetchFn, attesa: dip.attesaRiprova, risolvi: dip.risolvi });
+    const wamid = await mandaTesto(coll, { waId: c.wa_id, userId: c.user_id }, r.testo, {
+      fetchFn: dip.fetchFn, attesa: dip.attesaRiprova, risolvi: dip.risolvi, contatore: { db, fuso: dip.fuso, tipo: "risposta", ora: dip.ora?.() },
+    });
     const ora = dip.ora?.() ?? Date.now();
     salvaMessaggio(db, { wamid, contattoId: c.id, direzione: "out", tipo: "text", quando: ora, testo: r.testo }, ora);
     db.prepare("UPDATE wa_messaggi SET stato_invio = 'sent' WHERE wamid = ?").run(wamid);
@@ -107,6 +109,12 @@ export async function inviaRisposta(dip: DipendenzeWhatsapp, rispostaId: string,
     return { ok: true, inviata: true, messaggio: `Messaggio mandato su WhatsApp a ${nome}.` };
   } catch (e) {
     const msg = (e as Error).message || "Invio non riuscito.";
+    if (e instanceof NonConsegnabile) {
+      // 131060: non arriverà a questo contatto. La risposta si chiude (nessun «manda di nuovo»); il tetto non la conta.
+      db.prepare("UPDATE wa_risposte SET stato = 'scartata', esito = ? WHERE id = ?").run(msg.slice(0, 300), r.id);
+      registra(db, "whatsapp.invio", "errore", "luigi", { risposta: r.id, contatto: c.id, motivo: "131060: non consegnabile" });
+      return { ok: false, inviata: false, messaggio: `${nome}: ${msg}` };
+    }
     if (e instanceof InvioIncerto) {
       // Non si sa se è partito: niente nuovi tentativi da Jarvis (né da un secondo clic).
       db.prepare("UPDATE wa_risposte SET stato = 'incerto', esito = ? WHERE id = ?").run(msg.slice(0, 300), r.id);

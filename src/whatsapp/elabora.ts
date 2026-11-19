@@ -7,10 +7,16 @@ import { registra } from "../registro.js";
 import { SchemaValore, type MessaggioWebhook, type StatoWebhook, type ValoreWebhook } from "./schema.js";
 import { salvaContatto, salvaMessaggio } from "./archivio.js";
 import { normalizzaTelefono, pulisciNome, testoBreve, mascheraTelefono } from "./telefono.js";
-import type { MediaWa } from "./tipi.js";
+import { CODICE_NON_CONSEGNABILE, type MediaWa } from "./tipi.js";
 import { POSIZIONE_OPERAIO, POSIZIONE_NON_SALVATA, eOperaio, nonOperaio } from "../funzioni/operai.js";
 
-export interface EsitoElaborazione { nuovi: number; doppi: number; storico: number; eco: number; stati: number; contatti: number; ignorati: number }
+export interface EsitoElaborazione {
+  nuovi: number; doppi: number; storico: number; eco: number; stati: number; contatti: number; ignorati: number;
+  /** Parte 2: eventi «account_update» (PARTNER_REMOVED, ACCOUNT_OFFBOARDED, ACCOUNT_RECONNECTED…), gestiti dal servizio. */
+  eventiAccount: string[];
+  /** Parte 2: messaggi di Jarvis non consegnabili (131060) da togliere dal tetto del mese. */
+  nonConsegnati: Array<{ quando: number; tipo: "risposta" | "conferma" }>;
+}
 
 const TIPI_MEDIA = ["image", "document", "audio", "video", "sticker"] as const;
 const NOMI_TIPO: Record<string, string> = { image: "foto", document: "documento", audio: "audio", video: "video", sticker: "adesivo" };
@@ -165,8 +171,14 @@ function aggiornaStato(c: Contesto, s: StatoWebhook) {
   // L'ordine degli stati non è garantito: «read» non torna indietro a «delivered».
   const ordine = "CASE stato_invio WHEN 'read' THEN 3 WHEN 'delivered' THEN 2 WHEN 'sent' THEN 1 ELSE 0 END";
   const peso = { sent: 1, delivered: 2, read: 3, failed: 4 }[stato as "sent"]!;
+  const prima = c.db.prepare("SELECT stato_invio, automatico, quando FROM wa_messaggi WHERE wamid = ? AND direzione = 'out'").get(s.id) as { stato_invio: string; automatico: number; quando: number } | undefined;
   const r = c.db.prepare(`UPDATE wa_messaggi SET stato_invio = ?, errore_invio = ? WHERE wamid = ? AND direzione = 'out' AND (${ordine} < ? OR ? = 4)`).run(stato, errore, s.id, peso, peso);
-  c.db.prepare("UPDATE wa_risposte SET esito = ?, stato = CASE WHEN ? = 'failed' THEN 'errore' ELSE stato END WHERE wamid = ?").run(stato === "failed" ? errore : stato, stato, s.id);
+  // 131060: non arriverà mai. La risposta si chiude (niente «manda di nuovo» dalla pagina) e il messaggio esce dal tetto
+  // del mese (lo fa il servizio, una volta sola: solo al primo «failed»).
+  const nonConsegnabile = stato === "failed" && s.errors?.[0]?.code === CODICE_NON_CONSEGNABILE;
+  c.db.prepare("UPDATE wa_risposte SET esito = ?, stato = CASE WHEN ? = 'failed' THEN ? ELSE stato END WHERE wamid = ?")
+    .run(stato === "failed" ? errore : stato, stato, nonConsegnabile ? "scartata" : "errore", s.id);
+  if (nonConsegnabile && prima && prima.stato_invio !== "failed") c.esito.nonConsegnati.push({ quando: prima.quando, tipo: prima.automatico ? "conferma" : "risposta" });
   if (r.changes) c.esito.stati++;
 }
 
@@ -184,6 +196,8 @@ export function spiegaErroreMeta(codice: number | undefined, testo?: string): st
     10: "permesso mancante per questo numero",
     100: "dati del messaggio non validi",
     131000: "errore di WhatsApp: riprova più tardi",
+    // Coesistenza: succede con il primo messaggio a un contatto nuovo o con dispositivi non supportati. È normale.
+    131060: "questo messaggio non è arrivato al contatto. Succede con il primo messaggio a un contatto nuovo o se usa un dispositivo che non riceve i messaggi della API. Non riprovo: scrivigli tu dal telefono",
   };
   if (codice !== undefined && noti[codice]) return `WhatsApp: ${noti[codice]}.`;
   return `WhatsApp non ha consegnato il messaggio${codice !== undefined ? ` (codice ${codice})` : ""}${testo ? `: ${String(testo).slice(0, 120)}` : ""}.`;
@@ -194,7 +208,7 @@ export function spiegaErroreMeta(codice: number | undefined, testo?: string): st
  * i cambiamenti di un altro numero si ignorano.
  */
 export function elaboraWebhook(db: Db, corpo: { object: string; entry: Array<{ changes: Array<{ field: string; value?: unknown }> }> }, phoneNumberId: string, ora = Date.now()): EsitoElaborazione {
-  const esito: EsitoElaborazione = { nuovi: 0, doppi: 0, storico: 0, eco: 0, stati: 0, contatti: 0, ignorati: 0 };
+  const esito: EsitoElaborazione = { nuovi: 0, doppi: 0, storico: 0, eco: 0, stati: 0, contatti: 0, ignorati: 0, eventiAccount: [], nonConsegnati: [] };
   if (corpo.object !== "whatsapp_business_account") { esito.ignorati++; return esito; }
   db.transaction(() => {
     for (const e of corpo.entry) for (const ch of e.changes) {
@@ -255,9 +269,12 @@ export function elaboraWebhook(db: Db, corpo: { object: string; entry: Array<{ c
             esito.contatti++;
           }
           break;
-        case "account_update":
-          registra(db, "whatsapp.account", "fatto", "sistema", { evento: String((ch.value as { event?: unknown })?.event ?? "").slice(0, 60) });
+        case "account_update": {
+          const evento = String((ch.value as { event?: unknown })?.event ?? "").toUpperCase().replace(/[^A-Z0-9_]/g, "").slice(0, 60);
+          registra(db, "whatsapp.account", "fatto", "sistema", { evento });
+          if (evento) esito.eventiAccount.push(evento);
           break;
+        }
         default:
           esito.ignorati++;
       }

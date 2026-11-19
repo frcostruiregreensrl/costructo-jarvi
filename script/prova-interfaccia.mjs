@@ -77,6 +77,11 @@ try {
         const sb = await pagina.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
         controlla(`${nome}: pagina ${p} senza scorrimento orizzontale`, sb <= 0, `${sb}px`);
         await pagina.screenshot({ path: `${cartella}/${p}-${nome}.png`, fullPage: true });
+        if (p === "spesa") {
+          await pagina.waitForFunction(() => document.querySelector("#spesaWaTetto")?.textContent !== "—");
+          controlla(`${nome}: Spesa del mese con i messaggi WhatsApp di Jarvis (tetto 900, stima, telefono gratis)`, (await pagina.textContent("#spesaWaTetto")) === "900"
+            && /costo stimato/.test(await pagina.textContent("#spesaWaNota")) && /dal telefono sono gratis/.test(await pagina.textContent("#titoloSpesaWa + p + p + p")));
+        }
       }
       if (larghezza === 390 && tema === "light") {
         await pagina.evaluate(() => { location.hash = "memoria"; });
@@ -192,9 +197,19 @@ try {
         controlla("conferme automatiche spente di serie", !(await pagina.isChecked("#impConferme")));
         controlla("WhatsApp: impostazioni «Non collegato», conferme automatiche spente", /Non collegato/.test(await pagina.textContent("#waStatoColl")) && !(await pagina.isChecked("#waConferme")) && (await pagina.inputValue("#waToken")) === "");
         controlla("WhatsApp: indirizzo del webhook mostrato", /\/api\/whatsapp\/webhook$/.test(await pagina.textContent("#waUrl")));
-        await pagina.selectOption("#waProvider", "bsp");
-        controlla("WhatsApp: campi del fornitore", await pagina.locator("#waBase").isVisible() && !(await pagina.locator("#waVersione").isVisible()));
+        controlla("WhatsApp: 360dialog proposto di serie, indirizzo già scritto, niente segreto di Meta", (await pagina.inputValue("#waProvider")) === "360dialog"
+          && (await pagina.inputValue("#waBase")) === "https://waba-v2.360dialog.io" && !(await pagina.locator("#waSegreto").isVisible()) && /Chiave API di 360dialog/.test(await pagina.textContent("#waEtichettaToken")));
+        controlla("WhatsApp: pulsanti Configura il webhook, Prova collegamento, Sincronizza chat (una volta)", await pagina.locator("#waConfigura360").isVisible()
+          && await pagina.locator("#waProva").isVisible() && /una volta/.test(await pagina.textContent("#waSincronizza")));
+        await pagina.click("#waPassi360 summary");
+        controlla("WhatsApp: passi per Luigi (backup, 2.24.17, 7 giorni, Meta Business con 2FA, 360dialog, 24 ore, 14 giorni)",
+          /Backup[\s\S]*2\.24\.17[\s\S]*7 giorni[\s\S]*FR Costruire Green SRL[\s\S]*due passaggi[\s\S]*collega l'app WhatsApp Business esistente[\s\S]*entro 24 ore[\s\S]*14 giorni/.test(await pagina.textContent("#waPassi360")));
+        controlla("WhatsApp: tetto dei messaggi di Jarvis 900 e risposte dal telefono gratis", (await pagina.inputValue("#waTettoMessaggi")) === "900" && /dal telefono sono gratis/.test(await pagina.textContent("#formWhatsapp")));
         await pagina.locator("#formWhatsapp").screenshot({ path: `${cartella}/impostazioni-whatsapp-${nome}.png` });
+        await pagina.selectOption("#waProvider", "meta");
+        controlla("WhatsApp: con Meta diretto i campi di Meta (firma), senza quelli di 360dialog", await pagina.locator("#waVersione").isVisible() && await pagina.locator("#waSegreto").isVisible()
+          && !(await pagina.locator("#waBase").isVisible()) && !(await pagina.locator("#waConfigura360").isVisible()));
+        await pagina.selectOption("#waProvider", "360dialog");
         await pagina.waitForSelector("#funAutomatiche input");
         controlla("Funzioni: trascrizione spenta, scaricamento spento, invii automatici spenti di serie", (await pagina.inputValue("#funTrascrizione")) === "nessuno" && !(await pagina.isChecked("#funScarica"))
           && (await pagina.locator("#funAutomatiche input").count()) === 10 && (await pagina.locator("#funAutomatiche input:checked").count()) === 0 && !(await pagina.isChecked("#funModelli")));

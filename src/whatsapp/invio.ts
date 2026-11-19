@@ -1,18 +1,27 @@
 // Invio di un messaggio di testo con la WhatsApp Business Platform (Cloud API), direttamente con Meta
-// oppure tramite un fornitore (BSP, per esempio 360dialog) che usa lo stesso formato dei messaggi.
-//   meta: POST https://graph.facebook.com/{versione}/{phone_number_id}/messages, Authorization: Bearer {token}
-//   bsp:  POST {indirizzo}/messages (oppure {indirizzo}/{phone_number_id}/messages se l'id c'è),
-//         con l'intestazione scelta (per 360dialog «D360-API-KEY: {chiave}»)
+// oppure tramite 360dialog, che usa lo stesso formato dei messaggi.
+//   meta:      POST https://graph.facebook.com/{versione}/{phone_number_id}/messages, Authorization: Bearer {token}
+//   360dialog: POST {indirizzo}/messages (SENZA phone_number_id: la chiave vale per un solo numero),
+//              intestazione «D360-API-KEY: {chiave}»
+// Prima di ogni invio: tetto mensile dei messaggi di Jarvis (contatore.ts) e limite di 20 messaggi al secondo.
 // Corpo: {"messaging_product":"whatsapp","recipient_type":"individual","to":…,"type":"text","text":{…}}.
 // Jarvis NON segna mai i messaggi come letti (niente «spunte blu»): Luigi li legge sul telefono.
 // Qui non c'è nessuna funzione per farlo, e nessun altro tipo di richiesta verso Meta.
 import type { RisolviNome } from "../calendario.js";
-import { BASE_META, controllaFornitoreInRete } from "./collegamento.js";
+import { BASE_META, INTESTAZIONE_360, controllaFornitoreInRete } from "./collegamento.js";
 import { spiegaErroreMeta } from "./elabora.js";
-import { ErroreWhatsapp, InvioIncerto, MAX_TESTO_RISPOSTA, type CollegamentoWa } from "./tipi.js";
+import { limitatoreWhatsapp, prenotaInvio, type ContatoreInvio, type Limitatore } from "./contatore.js";
+import { leggiTesto } from "./corpo.js";
+import { CODICE_NON_CONSEGNABILE, ErroreWhatsapp, InvioIncerto, NonConsegnabile, MAX_TESTO_RISPOSTA, type CollegamentoWa } from "./tipi.js";
 
 export interface Destinatario { waId: string; userId: string }
-export interface OpzioniInvio { fetchFn?: typeof fetch; attesa?: (ms: number) => Promise<void>; timeoutMs?: number; risolvi?: RisolviNome }
+export interface OpzioniInvio {
+  fetchFn?: typeof fetch; attesa?: (ms: number) => Promise<void>; timeoutMs?: number; risolvi?: RisolviNome;
+  /** Contatore del mese e tetto (gli invii veri di Jarvis lo passano SEMPRE). */
+  contatore?: ContatoreInvio;
+  /** Limite di velocità (di serie quello di tutto il processo: 20 al secondo). */
+  limitatore?: Limitatore;
+}
 
 const MAX_RISPOSTA_BYTE = 64 * 1024;
 /**
@@ -31,13 +40,13 @@ function codiceRete(e: unknown): string {
 
 export function indirizzoInvio(c: CollegamentoWa): string {
   if (c.provider === "meta") return `${BASE_META}/${encodeURIComponent(c.versione)}/${encodeURIComponent(c.phoneNumberId)}/messages`;
-  return `${c.baseUrl.replace(/\/+$/, "")}${c.phoneNumberId ? `/${encodeURIComponent(c.phoneNumberId)}` : ""}/messages`;
+  return `${c.baseUrl.replace(/\/+$/, "")}/messages`;
 }
 
 export function intestazioniInvio(c: CollegamentoWa): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json" };
   if (c.provider === "meta") h.Authorization = `Bearer ${c.token}`;
-  else h[c.intestazione] = c.token;
+  else h[INTESTAZIONE_360] = c.token;
   return h;
 }
 
@@ -99,12 +108,26 @@ export async function mandaTesto(c: CollegamentoWa, d: Destinatario, testo: stri
 
 async function manda(c: CollegamentoWa, corpoJson: Record<string, unknown>, o: OpzioniInvio): Promise<string> {
   // Il token va SOLO all'indirizzo configurato: per un fornitore si ricontrolla ogni volta che il nome non porti alla rete interna.
-  if (c.provider === "bsp") await controllaFornitoreInRete(c.baseUrl, o.risolvi);
+  if (c.provider === "360dialog") await controllaFornitoreInRete(c.baseUrl, o.risolvi);
+  // Tetto del mese: se è raggiunto non parte niente (TettoMessaggi). La prenotazione si annulla solo quando il
+  // messaggio sicuramente non è partito; con esito incerto resta contato (meglio contare uno in più).
+  const annulla = o.contatore ? prenotaInvio(o.contatore) : () => {};
+  try {
+    return await mandaConTentativi(c, corpoJson, o);
+  } catch (e) {
+    if (!(e instanceof InvioIncerto)) annulla();
+    throw e;
+  }
+}
+
+async function mandaConTentativi(c: CollegamentoWa, corpoJson: Record<string, unknown>, o: OpzioniInvio): Promise<string> {
   const f = o.fetchFn ?? fetch;
+  const limitatore = o.limitatore ?? limitatoreWhatsapp;
   const attesa = o.attesa ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let ultimo = "WhatsApp non risponde in questo momento.";
   for (let i = 0; i < TENTATIVI; i++) {
     if (i) await attesa(i === 1 ? 1000 : 4000);
+    await limitatore.attendiTurno();
     let r: Response;
     try {
       r = await f(indirizzoInvio(c), {
@@ -115,7 +138,7 @@ async function manda(c: CollegamentoWa, corpoJson: Record<string, unknown>, o: O
       if (PRIMA_DI_PARTIRE.test(codiceRete(e))) { ultimo = "WhatsApp non risponde in questo momento (rete)."; continue; }
       throw new InvioIncerto();
     }
-    const grezzo = (await r.text().catch(() => "")).slice(0, MAX_RISPOSTA_BYTE);
+    const grezzo = await leggiTesto(r, MAX_RISPOSTA_BYTE);
     let dati: { messages?: Array<{ id?: unknown }>; error?: { code?: number; message?: string; error_data?: { details?: string } } } = {};
     try { dati = JSON.parse(grezzo); } catch { /* risposta non JSON */ }
     if (r.ok) {
@@ -125,6 +148,8 @@ async function manda(c: CollegamentoWa, corpoJson: Record<string, unknown>, o: O
     }
     if (r.status === 401 || r.status === 403) throw new ErroreWhatsapp(spiegaErroreMeta(dati.error?.code ?? 190));
     ultimo = dati.error ? spiegaErroreMeta(dati.error.code, dati.error.message) : `WhatsApp ha risposto con un errore (${r.status}).`;
+    // 131060: il messaggio non arriverà a quel contatto. Mai ripetere (né qui né con un pulsante).
+    if (dati.error?.code === CODICE_NON_CONSEGNABILE) throw new NonConsegnabile(ultimo);
     if (r.status >= 500) throw new InvioIncerto();
     if (r.status !== 429) throw new ErroreWhatsapp(ultimo);
   }

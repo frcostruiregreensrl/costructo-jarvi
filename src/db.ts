@@ -332,6 +332,14 @@ CREATE TABLE IF NOT EXISTS scontrini (
   allegato_id TEXT NOT NULL DEFAULT '',
   creato INTEGER NOT NULL
 );
+-- Fase 3 parte 2: messaggi mandati da Jarvis con la API di WhatsApp, per mese e tipo (risposta, conferma, modello).
+-- Servono al contatore di «Spesa del mese» e al tetto mensile. I messaggi che Luigi scrive dal telefono non ci sono.
+CREATE TABLE IF NOT EXISTS wa_invii_api (
+  mese TEXT NOT NULL,
+  tipo TEXT NOT NULL,
+  n INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (mese, tipo)
+);
 -- Ricerca unica (FTS5) sui messaggi e sulle mail salvati. Le righe seguono i messaggi: quando un messaggio si
 -- cancella (30 giorni), sparisce anche dall'indice.
 CREATE VIRTUAL TABLE IF NOT EXISTS cerca_wa USING fts5(testo, rif UNINDEXED, tokenize = 'unicode61 remove_diacritics 2');

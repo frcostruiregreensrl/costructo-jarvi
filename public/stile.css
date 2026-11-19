@@ -314,6 +314,11 @@ code { font-family: var(--mono); background: var(--sfondo-2); padding: 1px 5px; 
 .wa-azienda label { display: grid; gap: 4px; min-width: 0; flex: 1 1 200px; }
 .testo-lungo { overflow-wrap: anywhere; word-break: break-all; }
 #waCampiMeta[hidden], #waCampiBsp[hidden] { display: none !important; }
+/* WhatsApp parte 2 (360dialog): passi per Luigi e impostazioni avanzate */
+#formWhatsapp details { margin: 0; }
+#formWhatsapp summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+#formWhatsapp details[open] summary { margin-bottom: 6px; }
+#waConnessione:empty, #waStatoWebhook:empty { display: none; }
 
 /* Proposte e funzioni WhatsApp (Fase 3b) */
 .gruppo-proposte h2 { font-size: 18px; margin: 0 0 8px; }
