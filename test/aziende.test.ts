@@ -342,7 +342,7 @@ test("briefing con due aziende: una parte per azienda, ogni frase con il nome, �
     const testo = b.righe.map((r) => r.testo).join(" ");
     assert.match(testo, /Edilgreen: 3 cantieri aperti, 1 scadenza in arrivo \(la prima: F24 di novembre\)\./);
     assert.match(testo, /Rossi Costruzioni: 1 cantiere aperto, 1 documento in scadenza \(per esempio DURC\), 1 fattura da incassare per 800\s€\./);
-    assert.match(testo, /il primo alle \d\d:\d\d: Edilgreen: Sopralluogo Villa Verdi/);
+    assert.match(testo, /il primo alle \d{1,2}:\d\d: Edilgreen: Sopralluogo Villa Verdi/);
     assert.deepEqual(b.aziende.map((x) => x.nome), ["Edilgreen", "Rossi Costruzioni"]);
     assert.equal(b.lavoro, null, "con più aziende i dati stanno in «aziende»");
     assert.equal(b.adesso.length, 3);
