@@ -116,7 +116,8 @@ export interface CollegamentoVisibile {
 export function collegamentoVisibile(f: Fonte, origini: string[]): CollegamentoVisibile {
   const c = leggiCollegamento(f);
   const w = webhookAttivo(c), i = invioPronto(c);
-  const provider = c?.provider ?? "meta";
+  // Senza collegamento si propone 360dialog (la scelta di Luigi per la coesistenza).
+  const provider = c?.provider ?? "360dialog";
   return {
     provider,
     baseUrl: provider === "360dialog" ? c?.baseUrl || BASE_360 : "",

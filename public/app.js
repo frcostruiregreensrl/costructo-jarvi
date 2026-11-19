@@ -425,6 +425,14 @@ async function caricaSpesa() {
     $("#barraSpesa").setAttribute("aria-valuenow", String(Math.round(perc)));
     $("#barraSpesa").className = `barra-spesa ${s.raggiunto ? "pieno" : s.quasi ? "quasi" : ""}`;
     $("#spesaNota").textContent = `${s.mese} · ${s.richieste} richieste all'AI · ${s.raggiunto ? "tetto raggiunto: Jarvis è in pausa fino al mese prossimo o finché non alzi il tetto." : `restano ${dollari(Math.max(0, s.tettoUsd - s.spesaUsd))}.`}`;
+    if (s.whatsapp) {
+      const w = s.whatsapp;
+      const euro = (n) => n.toLocaleString("it-IT", { style: "currency", currency: "EUR", minimumFractionDigits: 2, maximumFractionDigits: 4 });
+      $("#spesaWaInviati").textContent = String(w.inviati);
+      $("#spesaWaTetto").textContent = String(w.tetto);
+      $("#spesaWaPrezzo").textContent = euro(w.prezzoEur);
+      $("#spesaWaNota").textContent = `${w.mese} · risposte ${w.perTipo.risposta}, conferme automatiche ${w.perTipo.conferma}, modelli ${w.perTipo.modello} · costo stimato ${euro(w.stimaEur)}${w.raggiunto ? " · tetto raggiunto: Jarvis non manda più messaggi da solo fino al mese prossimo (tu puoi sempre rispondere dal telefono)." : "."}`;
+    }
     const corpo = $("#spesaModelli");
     corpo.replaceChildren();
     if (!s.perModello.length) { const tr = crea("tr"); const td = crea("td", "vuoto", "Nessuna richiesta questo mese."); td.colSpan = 3; tr.append(td); corpo.append(tr); }
@@ -825,7 +833,7 @@ function disegnaWhatsapp(d) {
   const contenitore = $("#waGruppi");
   contenitore.replaceChildren();
   if (!d.chat.length) {
-    contenitore.append(crea("p", "vuoto", d.collegamento?.webhookAttivo ? "Nessuna chat in questo periodo." : "Ancora nessun messaggio: WhatsApp si collega nella parte 2."));
+    contenitore.append(crea("p", "vuoto", d.collegamento?.webhookAttivo ? "Nessuna chat in questo periodo." : "Ancora nessun messaggio: collega WhatsApp in Impostazioni → WhatsApp."));
     return;
   }
   // Gruppi: prima le aziende (per nome), poi il privato, poi i contatti da assegnare.
@@ -970,7 +978,7 @@ async function riempiChat(id, box, aziende) {
   box.append(riga, esitoAz);
   if (d.contatto.gruppo) { box.append(crea("p", "aiuto", "Nei gruppi Jarvis non scrive: rispondi dal telefono.")); return; }
   if (!d.dentroFinestra) {
-    box.append(crea("p", "avviso-forte", "Sono passate più di 24 ore dall'ultimo messaggio di questo contatto: WhatsApp permette di scrivere solo con un «modello» approvato da Meta, che arriverà nella parte 2. Se serve, rispondi dal telefono."));
+    box.append(crea("p", "avviso-forte", "Sono passate più di 24 ore dall'ultimo messaggio di questo contatto: WhatsApp permette di scrivere solo con un «modello» approvato da Meta. Se serve, rispondi dal telefono."));
     return;
   }
   const prepara = crea("button", "primario", "Prepara risposta");
@@ -1086,23 +1094,55 @@ async function caricaWaImpostazioni() {
   try { disegnaWaImpostazioni(await api("/api/whatsapp/collegamento")); } catch (e) { if (e instanceof NonAutenticato) mostraAccesso(); }
 }
 function mostraCampiWa(provider) {
-  $("#waCampiMeta").hidden = provider !== "meta";
-  $("#waCampiBsp").hidden = provider !== "bsp";
-  $("#waEtichettaToken").textContent = provider === "meta" ? "Token di accesso di Meta" : "Chiave API del fornitore";
+  const d360 = provider === "360dialog";
+  $("#waCampiMeta").hidden = d360;
+  $("#waCampiFirma").hidden = d360;
+  $("#waCampiBsp").hidden = !d360;
+  $("#waPassi360").hidden = !d360;
+  $("#waAvanzate").hidden = !d360;
+  $("#waConfigura360").hidden = !d360;
+  $("#waFacoltativo").hidden = !d360;
+  $("#waEtichettaToken").textContent = d360 ? "Chiave API di 360dialog" : "Token di accesso di Meta";
 }
+const quandoWa = (ms) => (ms ? new Date(ms).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" }) : "");
+const NOMI_EVENTI_WA = { PARTNER_REMOVED: "collegamento tolto", ACCOUNT_OFFBOARDED: "numero scollegato da Meta", ACCOUNT_RECONNECTED: "di nuovo collegato", MESSAGGI_IN_ARRIVO: "messaggi di nuovo in arrivo" };
 function disegnaWaImpostazioni(d) {
   $("#waStatoColl").textContent = d.stato;
   $("#waProvider").value = d.provider;
   mostraCampiWa(d.provider);
   $("#waVersione").value = d.versione || "";
-  $("#waBase").value = d.baseUrl || "";
-  $("#waIntestazione").value = d.intestazione || "";
+  $("#waBase").value = d.baseUrl || "https://waba-v2.360dialog.io";
   $("#waPhoneId").value = d.phoneNumberId || "";
+  $("#waPercorsoSalute").value = d.percorsoSalute || "";
+  $("#waPercorsoSync").value = d.percorsoSync || "";
   for (const id of ["#waToken", "#waSegreto", "#waVerifica"]) { $(id).value = ""; $(id).type = "password"; }
-  $("#waTokenStato").textContent = `Impostato: ${d.tokenImpostato ? "sì" : "no"}.`;
+  $("#waTokenStato").textContent = `${d.provider === "360dialog" ? "Impostata" : "Impostato"}: ${d.tokenImpostato ? "sì" : "no"}.`;
   $("#waSegretoStato").textContent = `Impostato: ${d.appSecretImpostato ? "sì" : "no"}. Serve a controllare che ogni messaggio arrivi davvero da Meta.`;
   $("#waVerificaStato").textContent = `Impostata: ${d.verifyTokenImpostato ? "sì" : "no"}.`;
   $("#waUrl").textContent = d.urlWebhook;
+  $("#waControllo").textContent = `Controllo dei messaggi in arrivo: ${d.controlloWebhook}`;
+  $("#waStatoWebhook").textContent = d.provider === "360dialog"
+    ? (d.webhookConfigurato ? `Webhook configurato su 360dialog il ${quandoWa(d.webhookConfigurato)}. Indirizzo: ${d.urlWebhook}` : "Webhook non ancora configurato su 360dialog.")
+    : "";
+  const c = d.connessione;
+  const conn = $("#waConnessione");
+  conn.className = c && c.stato === "interrotto" ? "avviso-forte" : "aiuto";
+  conn.textContent = !c ? "" : c.stato === "interrotto"
+    ? `Il collegamento WhatsApp si è interrotto${c.evento ? ` (${NOMI_EVENTI_WA[c.evento] || c.evento}, ${quandoWa(c.quando)})` : ""}: apri WhatsApp Business sul telefono.`
+    : `Collegato il ${quandoWa(c.collegatoIl)}.${c.ultimaAttivita ? ` Ultimo messaggio arrivato: ${quandoWa(c.ultimaAttivita)}.` : " Nessun messaggio ancora arrivato."}${c.evento ? ` Ultimo evento: ${NOMI_EVENTI_WA[c.evento] || c.evento} (${quandoWa(c.quando)}).` : ""}`;
+  const s = d.sync || {};
+  const passo = (p, nome) => (p?.stato === "fatto" ? `${nome}: fatto il ${quandoWa(p.quando)}` : p?.stato && p.stato !== "mai" ? `${nome}: ${p.stato === "incerto" ? "esito incerto" : "non riuscito"} (${p.esito})` : `${nome}: da fare`);
+  $("#waStatoSync").textContent = s.fatta
+    ? `Sincronizzazione delle chat fatta (${passo(s.contatti, "contatti")}; ${passo(s.storico, "storico")}). Non va ripetuta.`
+    : `Sincronizzazione delle chat: una volta sola, entro 24 ore dal collegamento${c ? ` (collegato il ${quandoWa(c.collegatoIl)})` : ""}. ${passo(s.contatti, "Contatti")}; ${passo(s.storico, "storico")}.`;
+  $("#waSincronizza").disabled = !!s.fatta;
+  const inv = d.invii;
+  if (inv) {
+    $("#waInviiMese").textContent = String(inv.inviati);
+    $("#waInviiTetto").textContent = String(inv.tetto);
+    if (document.activeElement !== $("#waTettoMessaggi")) $("#waTettoMessaggi").value = String(inv.tetto);
+    if (document.activeElement !== $("#waPrezzoMessaggio")) $("#waPrezzoMessaggio").value = String(inv.prezzoEur);
+  }
   $("#waConferme").checked = !!d.confermeAutomatiche;
   $("#waNascondi").checked = !!d.nascondiContenuto;
 }
@@ -1118,14 +1158,51 @@ $("#formWhatsapp").addEventListener("submit", async (e) => {
   e.preventDefault();
   const esito = $("#esitoWhatsapp");
   const corpo = { provider: $("#waProvider").value, phoneNumberId: $("#waPhoneId").value.trim() };
-  if (corpo.provider === "meta") corpo.versione = $("#waVersione").value.trim();
-  else { corpo.baseUrl = $("#waBase").value.trim(); corpo.intestazione = $("#waIntestazione").value.trim(); }
+  if (corpo.provider === "meta") {
+    corpo.versione = $("#waVersione").value.trim();
+    if ($("#waSegreto").value.trim()) corpo.appSecret = $("#waSegreto").value.trim();
+    if ($("#waVerifica").value.trim()) corpo.verifyToken = $("#waVerifica").value.trim();
+  } else {
+    corpo.baseUrl = $("#waBase").value.trim();
+    corpo.percorsoSalute = $("#waPercorsoSalute").value.trim();
+    corpo.percorsoSync = $("#waPercorsoSync").value.trim();
+  }
   if ($("#waToken").value.trim()) corpo.token = $("#waToken").value.trim();
-  if ($("#waSegreto").value.trim()) corpo.appSecret = $("#waSegreto").value.trim();
-  if ($("#waVerifica").value.trim()) corpo.verifyToken = $("#waVerifica").value.trim();
   try {
-    disegnaWaImpostazioni(await api("/api/whatsapp/collegamento", { metodo: "PUT", corpo }));
-    esito.className = "esito"; esito.textContent = "Salvato. Il collegamento vero arriva nella parte 2.";
+    const d = await api("/api/whatsapp/collegamento", { metodo: "PUT", corpo });
+    disegnaWaImpostazioni(d);
+    esito.className = "esito";
+    esito.textContent = d.provider === "360dialog" && !d.webhookAttivo ? "Salvato. Ora premi «Configura il webhook su 360dialog»." : "Salvato.";
+  } catch (err) { if (err instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = err.message; }
+});
+/** Pulsanti della parte 2: risposta {ok, messaggio, stato?} anche quando l'esito non è buono (502). */
+async function operazioneWa(bottone, percorso, corpo) {
+  const esito = $("#esitoWhatsapp");
+  bottone.disabled = true;
+  esito.className = "esito"; esito.textContent = "Un momento…";
+  try {
+    const r = await fetch(percorso, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo), credentials: "same-origin" });
+    if (r.status === 401) return mostraAccesso();
+    const d = await r.json().catch(() => ({}));
+    if (d.stato) disegnaWaImpostazioni(d.stato); else await caricaWaImpostazioni();
+    esito.className = d.ok ? "esito" : "esito male";
+    esito.textContent = d.messaggio || d.errore || "Operazione non riuscita.";
+  } catch { esito.className = "esito male"; esito.textContent = "Jarvis non risponde: riprova."; } finally { bottone.disabled = false; }
+}
+$("#waConfigura360").addEventListener("click", (e) => operazioneWa(e.currentTarget, "/api/whatsapp/360dialog/webhook", {}));
+$("#waProva").addEventListener("click", (e) => operazioneWa(e.currentTarget, "/api/whatsapp/prova", {}));
+$("#waSincronizza").addEventListener("click", (e) => {
+  if (!confirm("Sincronizzare contatti e storico delle chat? Si fa una volta sola, entro 24 ore dal collegamento dell'app WhatsApp Business.")) return;
+  operazioneWa(e.currentTarget, "/api/whatsapp/sincronizza", { conferma: true });
+});
+$("#waSalvaTetto").addEventListener("click", async () => {
+  const esito = $("#esitoWaTetto");
+  const tetto = Number($("#waTettoMessaggi").value), prezzo = Number($("#waPrezzoMessaggio").value);
+  if (!Number.isInteger(tetto) || tetto < 0 || !(prezzo >= 0 && prezzo <= 1)) { esito.className = "esito male"; esito.textContent = "Scrivi un tetto (numero intero) e un prezzo tra 0 e 1 euro."; return; }
+  try {
+    await api("/api/impostazioni", { metodo: "PUT", corpo: { whatsappTettoMessaggiMese: tetto, whatsappPrezzoMessaggioEur: prezzo } });
+    esito.className = "esito"; esito.textContent = `Salvato: al massimo ${tetto} messaggi di Jarvis al mese.`;
+    await caricaWaImpostazioni();
   } catch (err) { if (err instanceof NonAutenticato) return mostraAccesso(); esito.className = "esito male"; esito.textContent = err.message; }
 });
 $("#waScollega").addEventListener("click", async () => {

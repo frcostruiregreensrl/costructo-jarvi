@@ -150,7 +150,7 @@
       <section id="pagina-whatsapp" class="pagina" hidden aria-labelledby="titoloWhatsapp">
         <h1 id="titoloWhatsapp">WhatsApp</h1>
         <p class="sotto">Le chat del tuo numero WhatsApp, divise per azienda e privato. Jarvis legge, riassume e segnala le urgenze. Una risposta parte solo quando la confermi tu, e solo entro 24 ore dall'ultimo messaggio del contatto. Jarvis non manda mai le «spunte blu»: i messaggi li leggi tu sul telefono.</p>
-        <p id="waNonCollegato" class="avviso-forte" hidden>WhatsApp non è ancora collegato: il collegamento vero arriva nella <b>parte 2</b> (Impostazioni → WhatsApp). Finché non c'è, qui non arrivano messaggi e non parte niente.</p>
+        <p id="waNonCollegato" class="avviso-forte" hidden>WhatsApp non è ancora collegato: si collega in Impostazioni → WhatsApp (con 360dialog, passo per passo). Finché non c'è, qui non arrivano messaggi e non parte niente.</p>
         <div class="schede" role="tablist" aria-label="Quali chat">
           <button role="tab" data-vista="privato" aria-selected="false">Privato</button>
           <button role="tab" data-vista="lavoro" aria-selected="false">Lavoro</button>
@@ -260,6 +260,12 @@
           <thead><tr><th scope="col">Modello</th><th scope="col">Richieste</th><th scope="col">Spesa</th></tr></thead>
           <tbody id="spesaModelli"></tbody>
         </table>
+        <div class="riquadro" aria-labelledby="titoloSpesaWa">
+          <h2 id="titoloSpesaWa">WhatsApp: messaggi mandati da Jarvis</h2>
+          <p class="cifra"><b id="spesaWaInviati">—</b> <span>su un tetto di <b id="spesaWaTetto">—</b></span></p>
+          <p id="spesaWaNota" class="sotto"></p>
+          <p class="aiuto">Stima: i primi 1.000 messaggi del mese sono gratis, poi circa <span id="spesaWaPrezzo">0,0248 €</span> l'uno. Il conto vero lo fa Meta (tramite 360dialog). Le risposte che scrivi tu dal telefono sono gratis e non si contano.</p>
+        </div>
         <p class="sotto">Cifre stimate dal listino Anthropic (dollari). Claude Haiku 5.5 è il modello di tutti i giorni; Claude Sonnet 5.5 parte solo se dici «pensaci bene». Calcoli, briefing e frasi rapide non costano niente.</p>
       </section>
 
@@ -408,49 +414,93 @@
         <form id="formWhatsapp" class="modulo" autocomplete="off">
           <fieldset>
             <legend>WhatsApp</legend>
-            <p class="avviso-forte">Il collegamento vero con WhatsApp arriva nella <b>parte 2</b>, dopo il passaggio del numero all'app WhatsApp Business e la scelta (da approvare) tra Meta diretto e un fornitore. Questi campi serviranno allora: finché mancano, Jarvis non riceve e non manda niente.</p>
             <p class="aiuto">Stato: <b id="waStatoColl">Non collegato</b></p>
+            <p id="waConnessione" class="aiuto" role="status" aria-live="polite"></p>
             <label>Come si collega
               <select id="waProvider">
+                <option value="360dialog">Tramite 360dialog (coesistenza con l'app WhatsApp Business)</option>
                 <option value="meta">Direttamente con Meta (Cloud API)</option>
-                <option value="bsp">Tramite un fornitore (per esempio 360dialog)</option>
               </select>
             </label>
-            <div id="waCampiMeta" class="sottomodulo">
+            <details id="waPassi360" class="riquadro">
+              <summary><b>Come si collega con 360dialog, passo per passo</b></summary>
+              <ol class="passi">
+                <li>Sul telefono fai la <b>copia di sicurezza delle chat</b> (WhatsApp → Impostazioni → Chat → Backup delle chat).</li>
+                <li>Passa il numero all'app <b>WhatsApp Business</b> (gratuita), versione <b>2.24.17 o più recente</b>. Usala per circa <b>7 giorni</b> prima di collegarla.</li>
+                <li>Crea l'<b>account Meta Business</b> per <b>FR Costruire Green SRL</b> (business.facebook.com) e attiva la <b>verifica in due passaggi</b>.</li>
+                <li>Registrati su <b>360dialog</b> (piano Regular) e scegli «<b>collega l'app WhatsApp Business esistente</b>». Sul telefono premi <b>Connetti</b> e conferma la condivisione delle chat.</li>
+                <li>Su 360dialog crea la <b>chiave API</b> del numero, poi <b>torna qui entro 24 ore</b>: incolla la chiave qui sotto e premi <b>Salva</b>.</li>
+                <li>Premi <b>Configura il webhook su 360dialog</b>, poi <b>Prova collegamento</b>, poi <b>Sincronizza chat (una volta)</b>.</li>
+                <li>Da allora apri WhatsApp Business sul telefono <b>almeno ogni 14 giorni</b>: altrimenti Meta scollega Jarvis.</li>
+              </ol>
+              <p class="aiuto">I messaggi scritti da WhatsApp per Windows o dallo smartwatch non arrivano a Jarvis.</p>
+            </details>
+            <div id="waCampiBsp" class="sottomodulo">
+              <label>Indirizzo di 360dialog (https)
+                <input id="waBase" type="url" maxlength="300" placeholder="https://waba-v2.360dialog.io" spellcheck="false">
+              </label>
+            </div>
+            <div id="waCampiMeta" class="sottomodulo" hidden>
               <label>Versione della Graph API di Meta
                 <input id="waVersione" maxlength="10" placeholder="v27.0" spellcheck="false">
               </label>
             </div>
-            <div id="waCampiBsp" class="sottomodulo" hidden>
-              <label>Indirizzo del fornitore (https)
-                <input id="waBase" type="url" maxlength="300" placeholder="https://waba-v2.360dialog.io" spellcheck="false">
-              </label>
-              <label>Nome dell'intestazione con la chiave
-                <input id="waIntestazione" maxlength="40" placeholder="D360-API-KEY" spellcheck="false">
-              </label>
-            </div>
-            <label>Id del numero (phone_number_id)
+            <label><span id="waEtichettaToken">Chiave API di 360dialog</span>
+              <input id="waToken" type="password" maxlength="1000" autocomplete="new-password" placeholder="lascia vuoto per non cambiarla" aria-describedby="waTokenStato">
+            </label>
+            <p id="waTokenStato" class="aiuto">Impostata: no.</p>
+            <label>Id del numero (phone_number_id)<span id="waFacoltativo"> — facoltativo con 360dialog</span>
               <input id="waPhoneId" inputmode="numeric" maxlength="30" spellcheck="false">
             </label>
-            <label><span id="waEtichettaToken">Token di accesso di Meta</span>
-              <input id="waToken" type="password" maxlength="1000" autocomplete="new-password" placeholder="lascia vuoto per non cambiarlo" aria-describedby="waTokenStato">
-            </label>
-            <p id="waTokenStato" class="aiuto">Impostato: no.</p>
-            <label>Segreto dell'app di Meta (App Secret)
-              <input id="waSegreto" type="password" maxlength="200" autocomplete="new-password" placeholder="lascia vuoto per non cambiarlo" aria-describedby="waSegretoStato">
-            </label>
-            <p id="waSegretoStato" class="aiuto">Impostato: no. Serve a controllare che ogni messaggio arrivi davvero da Meta.</p>
-            <label>Parola di verifica (Verify Token)
-              <input id="waVerifica" type="password" maxlength="200" autocomplete="new-password" placeholder="lascia vuoto per non cambiarla" aria-describedby="waVerificaStato">
-            </label>
-            <p id="waVerificaStato" class="aiuto">Impostata: no.</p>
-            <button type="button" id="waGenera" class="secondario">Genera una parola di verifica</button>
-            <p class="aiuto">Indirizzo del webhook da scrivere nel pannello di Meta (Callback URL): <code id="waUrl" class="testo-lungo"></code></p>
+            <div id="waCampiFirma" class="sottomodulo" hidden>
+              <label>Segreto dell'app di Meta (App Secret)
+                <input id="waSegreto" type="password" maxlength="200" autocomplete="new-password" placeholder="lascia vuoto per non cambiarlo" aria-describedby="waSegretoStato">
+              </label>
+              <p id="waSegretoStato" class="aiuto">Impostato: no. Serve a controllare che ogni messaggio arrivi davvero da Meta.</p>
+              <label>Parola di verifica (Verify Token)
+                <input id="waVerifica" type="password" maxlength="200" autocomplete="new-password" placeholder="lascia vuoto per non cambiarla" aria-describedby="waVerificaStato">
+              </label>
+              <p id="waVerificaStato" class="aiuto">Impostata: no.</p>
+              <button type="button" id="waGenera" class="secondario">Genera una parola di verifica</button>
+              <p class="aiuto">Indirizzo del webhook da scrivere nel pannello di Meta (Callback URL): <code id="waUrl" class="testo-lungo"></code></p>
+            </div>
+            <p id="waControllo" class="aiuto"></p>
+            <details id="waAvanzate">
+              <summary>Impostazioni avanzate di 360dialog (da verificare al primo uso vero)</summary>
+              <div class="sottomodulo">
+                <label>Percorso della prova di collegamento
+                  <input id="waPercorsoSalute" maxlength="120" placeholder="/health_status" spellcheck="false">
+                </label>
+                <label>Percorso della sincronizzazione delle chat
+                  <input id="waPercorsoSync" maxlength="120" placeholder="/smb_app_data" spellcheck="false">
+                </label>
+              </div>
+            </details>
             <div class="azioni-modulo">
               <button class="primario" type="submit">Salva</button>
               <button id="waScollega" class="secondario" type="button">Scollega</button>
             </div>
+            <div class="azioni-modulo">
+              <button id="waConfigura360" class="secondario" type="button">Configura il webhook su 360dialog</button>
+              <button id="waProva" class="secondario" type="button">Prova collegamento</button>
+              <button id="waSincronizza" class="secondario" type="button">Sincronizza chat (una volta)</button>
+            </div>
+            <p id="waStatoWebhook" class="aiuto"></p>
+            <p id="waStatoSync" class="aiuto">Sincronizzazione delle chat: da fare una volta, entro 24 ore dal collegamento.</p>
             <p id="esitoWhatsapp" class="esito" role="status" aria-live="polite"></p>
+          </fieldset>
+          <fieldset>
+            <legend>WhatsApp: messaggi mandati da Jarvis e costi</legend>
+            <p class="aiuto">Messaggi mandati da Jarvis questo mese (risposte che confermi, conferme automatiche, modelli): <b id="waInviiMese">0</b> su un tetto di <b id="waInviiTetto">900</b>.</p>
+            <label>Tetto mensile dei messaggi di Jarvis
+              <input id="waTettoMessaggi" type="number" min="0" max="100000" step="1" inputmode="numeric">
+            </label>
+            <label>Prezzo stimato di un messaggio oltre i 1.000 gratuiti (euro)
+              <input id="waPrezzoMessaggio" type="number" min="0" max="1" step="0.0001" inputmode="decimal">
+            </label>
+            <p class="aiuto">Da ottobre 2026 Meta fa pagare anche le risposte oltre le prime 1.000 del mese. Al tetto Jarvis non manda più niente da solo. <b>Le risposte che scrivi tu dal telefono sono gratis</b> e non sono mai bloccate.</p>
+            <button id="waSalvaTetto" class="secondario" type="button">Salva tetto e prezzo</button>
+            <p id="esitoWaTetto" class="esito" role="status" aria-live="polite"></p>
           </fieldset>
           <fieldset>
             <legend>WhatsApp: conferme automatiche e notifiche</legend>
