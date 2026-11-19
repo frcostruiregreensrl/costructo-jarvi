@@ -8,7 +8,10 @@ import { registra } from "./registro.js";
 import { leggiImpostazioni } from "./impostazioni.js";
 import type { ServizioWhatsapp } from "./whatsapp/servizio.js";
 import { ErroreWhatsapp, MAX_TESTO_RISPOSTA, PRIVATO, type ContattoWa, type MessaggioWa, type RispostaWa } from "./whatsapp/tipi.js";
-import { collegamentoVisibile, salvaCollegamento, scollega, SchemaModificaCollegamento } from "./whatsapp/collegamento.js";
+import { collegamentoVisibile, invioPronto, salvaCollegamento, scollega, SchemaModificaCollegamento } from "./whatsapp/collegamento.js";
+import { dimenticaConnessione, leggiConnessione, leggiSync, segnaCollegato, syncFatta, ultimaAttivita } from "./whatsapp/connessione.js";
+import { configuraWebhook360, provaCollegamento, sincronizzaChat } from "./whatsapp/fornitore.js";
+import { riepilogoInviiWa } from "./whatsapp/contatore.js";
 import { elencaChat, leggiContatto, leggiRisposta, mediaDi, nomeContatto, nomeSpazio, risposteAperte, statoChat, ultimiMessaggi } from "./whatsapp/archivio.js";
 import { domandeAperte, rispondiDomanda } from "./whatsapp/attribuzione.js";
 import { correggiRisposta, improntaRisposta, inviaRisposta, preparaRisposta, proponiTesto, scartaRisposta } from "./whatsapp/risposte.js";
@@ -54,17 +57,28 @@ export function montaRotteWhatsapp(app: Express, o: OpzioniRotteWa): void {
   const vistaRisposta = (r: RispostaWa) => ({ id: r.id, tipo: r.tipo, testo: r.testo, creata: r.creata, stato: r.stato, esito: r.esito, impronta: improntaRisposta(r) });
 
   // ------------------------------------------------------------ Impostazioni → WhatsApp
-  const statoImpostazioni = () => ({
-    ...collegamentoVisibile(fonte, o.origini()),
-    confermeAutomatiche: leggiImpostazioni(db).whatsappConfermeAutomatiche,
-    nascondiContenuto: leggiImpostazioni(db).whatsappNascondiContenuto,
-  });
+  const opzFornitore = () => ({ ...fonte, fetchFn: dip.fetchFn, risolvi: dip.risolvi, ora: dip.ora });
+  const statoImpostazioni = () => {
+    const conn = leggiConnessione(db);
+    const sync = leggiSync(db);
+    return {
+      ...collegamentoVisibile(fonte, o.origini()),
+      confermeAutomatiche: leggiImpostazioni(db).whatsappConfermeAutomatiche,
+      nascondiContenuto: leggiImpostazioni(db).whatsappNascondiContenuto,
+      // Parte 2: stato del collegamento (eventi di Meta), sincronizzazione una tantum, messaggi mandati da Jarvis nel mese.
+      connessione: conn ? { stato: conn.stato, evento: conn.evento, quando: conn.quando, collegatoIl: conn.collegatoIl, ultimaAttivita: ultimaAttivita(db) } : null,
+      sync: { ...sync, fatta: syncFatta(sync) },
+      invii: riepilogoInviiWa(db, dip.fuso, dip.ora?.()),
+    };
+  };
   app.get("/api/whatsapp/collegamento", (_req, res) => { res.json(statoImpostazioni()); });
   app.put("/api/whatsapp/collegamento", async (req, res) => {
     const d = SchemaModificaCollegamento.safeParse(req.body);
     if (!d.success) return res.status(400).json({ errore: "Dati non validi." });
     try {
-      await salvaCollegamento({ ...fonte, risolvi: dip.risolvi }, d.data);
+      const c = await salvaCollegamento({ ...fonte, risolvi: dip.risolvi }, d.data);
+      // Da qui partono le 24 ore della sincronizzazione e il controllo dei 14 giorni (nuovo fornitore = da capo).
+      if (invioPronto(c)) segnaCollegato(db, c.provider, dip.ora?.() ?? Date.now());
       // Nel registro solo i nomi dei campi cambiati, mai i valori.
       registra(db, "collegamenti.modifica", "fatto", "luigi", { campi: ["whatsapp", ...Object.keys(d.data).filter((k) => (d.data as Record<string, unknown>)[k] !== "")] });
       res.json(statoImpostazioni());
@@ -75,8 +89,29 @@ export function montaRotteWhatsapp(app: Express, o: OpzioniRotteWa): void {
   });
   app.delete("/api/whatsapp/collegamento", (_req, res) => {
     scollega(fonte);
+    dimenticaConnessione(db);
     registra(db, "collegamenti.modifica", "fatto", "luigi", { campi: ["whatsapp.rimuovi"] });
     res.json(statoImpostazioni());
+  });
+  // Parte 2 — solo con un pulsante di Luigi. Nessun segreto nelle risposte né nel registro.
+  app.post("/api/whatsapp/360dialog/webhook", async (_req, res) => {
+    try {
+      const e = await configuraWebhook360(opzFornitore(), o.origini());
+      res.status(e.ok ? 200 : 502).json({ ...e, stato: statoImpostazioni() });
+    } catch (e) { errore(res, e); }
+  });
+  app.post("/api/whatsapp/prova", async (_req, res) => {
+    const e = await provaCollegamento(opzFornitore());
+    registra(db, "whatsapp.prova", e.ok ? "fatto" : "errore", "luigi", { esito: e.ok ? "ok" : e.messaggio.slice(0, 120) });
+    res.json(e);
+  });
+  app.post("/api/whatsapp/sincronizza", async (req, res) => {
+    const d = z.object({ conferma: z.literal(true) }).strict().safeParse(req.body);
+    if (!d.success) return res.status(400).json({ errore: "Serve la tua conferma: la sincronizzazione si fa una volta sola." });
+    try {
+      const e = await sincronizzaChat(opzFornitore());
+      res.status(e.ok ? 200 : 502).json({ ...e, stato: statoImpostazioni() });
+    } catch (e) { errore(res, e); }
   });
 
   // ------------------------------------------------------------ pagina WhatsApp

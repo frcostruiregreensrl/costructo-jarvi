@@ -30,25 +30,45 @@ export const MAX_TESTO_RISPOSTA = 4000;
  */
 export const MAX_TESTO_CONFERMA = 1000;
 
-export type Provider = "meta" | "bsp";
+/**
+ * Come si collega WhatsApp (Fase 3, parte 2):
+ *  - «meta»: direttamente con la Cloud API di Meta. Webhook firmato da Meta (X-Hub-Signature-256, segreto dell'app).
+ *  - «360dialog»: tramite il fornitore 360dialog (serve per la «coesistenza» con l'app WhatsApp Business).
+ *    I messaggi hanno lo stesso formato di Meta, ma NON sono firmati con un segreto nostro: il webhook si
+ *    controlla con un'intestazione segreta che Jarvis sceglie e scrive lui stesso nella configurazione di 360dialog.
+ * Un vecchio «bsp» salvato nella parte 1 si legge come «360dialog».
+ */
+export type Provider = "meta" | "360dialog";
 
 /** Il collegamento a WhatsApp, salvato nel segreto cifrato «whatsapp». */
 export interface CollegamentoWa {
   provider: Provider;
-  /** Solo per «bsp» (fornitore, per esempio 360dialog): indirizzo di base. Per «meta» è sempre graph.facebook.com. */
+  /** Solo per «360dialog»: indirizzo di base (di serie https://waba-v2.360dialog.io). Per «meta» è sempre graph.facebook.com. */
   baseUrl: string;
   /** Versione della Graph API di Meta (per esempio v27.0). */
   versione: string;
-  /** Id del numero di telefono su WhatsApp (phone_number_id). */
+  /** Id del numero di telefono su WhatsApp (phone_number_id). Per 360dialog serve solo a scartare i messaggi di altri numeri. */
   phoneNumberId: string;
-  /** Meta: token di accesso (Bearer). Fornitore: chiave API. */
+  /** Meta: token di accesso (Bearer). 360dialog: chiave API del numero (intestazione D360-API-KEY). */
   token: string;
-  /** Fornitore: nome dell'intestazione con la chiave (per 360dialog «D360-API-KEY»). */
-  intestazione: string;
-  /** Segreto dell'app di Meta: serve a controllare la firma X-Hub-Signature-256 di ogni webhook. */
+  /** Segreto dell'app di Meta: serve a controllare la firma X-Hub-Signature-256 di ogni webhook (obbligatorio con «meta»). */
   appSecret: string;
-  /** Parola di verifica scelta da Luigi, da scrivere anche nel pannello di Meta. */
+  /** Parola di verifica scelta da Luigi, da scrivere anche nel pannello di Meta (solo «meta»). */
   verifyToken: string;
+  /**
+   * Solo «360dialog»: segreto casuale (32 byte) che Jarvis genera e manda lui a 360dialog quando configura il webhook.
+   * 360dialog lo rimanda in ogni webhook nell'intestazione X-Jarvis-Segreto. Luigi non lo vede mai.
+   */
+  webhookSecret: string;
+  /** Il segreto precedente vale ancora fino a questo momento (cambio in corso), poi mai più. */
+  webhookSecretPrecedente: string;
+  precedenteFino: number;
+  /** Quando Jarvis ha configurato il webhook su 360dialog (0 = mai). */
+  webhookConfigurato: number;
+  /** [non verificato] Percorso della prova di collegamento su 360dialog (di serie /health_status). */
+  percorsoSalute: string;
+  /** [non verificato] Percorso della sincronizzazione di contatti e storico su 360dialog (di serie /smb_app_data). */
+  percorsoSync: string;
 }
 
 export interface DipendenzeWhatsapp {

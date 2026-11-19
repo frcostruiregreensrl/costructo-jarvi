@@ -10,7 +10,11 @@ import { normalizzaTelefono, pulisciNome, testoBreve, mascheraTelefono } from ".
 import type { MediaWa } from "./tipi.js";
 import { POSIZIONE_OPERAIO, POSIZIONE_NON_SALVATA, eOperaio, nonOperaio } from "../funzioni/operai.js";
 
-export interface EsitoElaborazione { nuovi: number; doppi: number; storico: number; eco: number; stati: number; contatti: number; ignorati: number }
+export interface EsitoElaborazione {
+  nuovi: number; doppi: number; storico: number; eco: number; stati: number; contatti: number; ignorati: number;
+  /** Parte 2: eventi «account_update» (PARTNER_REMOVED, ACCOUNT_OFFBOARDED, ACCOUNT_RECONNECTED…), gestiti dal servizio. */
+  eventiAccount: string[];
+}
 
 const TIPI_MEDIA = ["image", "document", "audio", "video", "sticker"] as const;
 const NOMI_TIPO: Record<string, string> = { image: "foto", document: "documento", audio: "audio", video: "video", sticker: "adesivo" };
@@ -184,6 +188,8 @@ export function spiegaErroreMeta(codice: number | undefined, testo?: string): st
     10: "permesso mancante per questo numero",
     100: "dati del messaggio non validi",
     131000: "errore di WhatsApp: riprova più tardi",
+    // Coesistenza: succede con il primo messaggio a un contatto nuovo o con dispositivi non supportati. È normale.
+    131060: "questo messaggio non è arrivato al contatto. Succede con il primo messaggio a un contatto nuovo o se usa un dispositivo che non riceve i messaggi della API. Non riprovo: scrivigli tu dal telefono",
   };
   if (codice !== undefined && noti[codice]) return `WhatsApp: ${noti[codice]}.`;
   return `WhatsApp non ha consegnato il messaggio${codice !== undefined ? ` (codice ${codice})` : ""}${testo ? `: ${String(testo).slice(0, 120)}` : ""}.`;
@@ -194,7 +200,7 @@ export function spiegaErroreMeta(codice: number | undefined, testo?: string): st
  * i cambiamenti di un altro numero si ignorano.
  */
 export function elaboraWebhook(db: Db, corpo: { object: string; entry: Array<{ changes: Array<{ field: string; value?: unknown }> }> }, phoneNumberId: string, ora = Date.now()): EsitoElaborazione {
-  const esito: EsitoElaborazione = { nuovi: 0, doppi: 0, storico: 0, eco: 0, stati: 0, contatti: 0, ignorati: 0 };
+  const esito: EsitoElaborazione = { nuovi: 0, doppi: 0, storico: 0, eco: 0, stati: 0, contatti: 0, ignorati: 0, eventiAccount: [] };
   if (corpo.object !== "whatsapp_business_account") { esito.ignorati++; return esito; }
   db.transaction(() => {
     for (const e of corpo.entry) for (const ch of e.changes) {
@@ -255,9 +261,12 @@ export function elaboraWebhook(db: Db, corpo: { object: string; entry: Array<{ c
             esito.contatti++;
           }
           break;
-        case "account_update":
-          registra(db, "whatsapp.account", "fatto", "sistema", { evento: String((ch.value as { event?: unknown })?.event ?? "").slice(0, 60) });
+        case "account_update": {
+          const evento = String((ch.value as { event?: unknown })?.event ?? "").toUpperCase().replace(/[^A-Z0-9_]/g, "").slice(0, 60);
+          registra(db, "whatsapp.account", "fatto", "sistema", { evento });
+          if (evento) esito.eventiAccount.push(evento);
           break;
+        }
         default:
           esito.ignorati++;
       }

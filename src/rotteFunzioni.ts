@@ -291,7 +291,9 @@ export function montaRotteFunzioni(app: Express, o: OpzioniRotteFunzioni): void 
     const coll = leggiCollegamento(dip);
     if (!invioPronto(coll)) return res.status(409).json({ errore: "WhatsApp non è collegato (parte 2): non ho mandato niente." });
     try {
-      const wamid = await mandaModello(coll, { waId: normalizzaTelefono(m.telefono)!, userId: "" }, { nome: m.nome, lingua: m.lingua, parametri: m.parametri }, { fetchFn: dip.fetchFn, attesa: dip.attesaRiprova, risolvi: dip.risolvi });
+      const wamid = await mandaModello(coll, { waId: normalizzaTelefono(m.telefono)!, userId: "" }, { nome: m.nome, lingua: m.lingua, parametri: m.parametri }, {
+        fetchFn: dip.fetchFn, attesa: dip.attesaRiprova, risolvi: dip.risolvi, contatore: { db, fuso: dip.fuso, tipo: "modello" },
+      });
       registra(db, "whatsapp.modello", "fatto", "luigi", { numero: mascheraTelefono(m.telefono), modello: m.nome, wamid: wamid.slice(0, 60) });
       res.json({ ok: true, messaggio: "Promemoria mandato con il modello di Meta." });
     } catch (e) {

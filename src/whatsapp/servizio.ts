@@ -18,6 +18,7 @@ import { mandaConfermeWa } from "./rispostaAuto.js";
 import { preparaRisposta } from "./risposte.js";
 import { leggiContatto, mediaDi, nomeContatto, nomeSpazio, statoChat } from "./archivio.js";
 import { leggiCollegamento } from "./collegamento.js";
+import { applicaEventoAccount, segnaMessaggiInArrivo } from "./connessione.js";
 import { giroVocali, giroAllegati, giroFunzioni, type EsitoFunzioni } from "../funzioni/analisi.js";
 import { mandaAutomatiche, aggiornaStatiProposte, recuperaBloccate } from "../proposte/invio.js";
 import { PAUSA_NOTIFICHE_MS, PRIVATO, RAGGRUPPA_MS, type ContattoWa, type DipendenzeWhatsapp, type MessaggioWa } from "./tipi.js";
@@ -148,10 +149,17 @@ export function creaServizioWhatsapp(dip: DipendenzeWhatsapp) {
      * Il giro parte appena il contatto smette di scrivere (2 minuti), così i messaggi vicini si classificano insieme.
      */
     ricevi(corpo: Parameters<typeof elaboraWebhook>[1]): Promise<EsitoElaborazione | null> {
-      const lavoro = coda.then(() => {
+      const lavoro = coda.then(async () => {
         const coll = leggiCollegamento(dip);
-        const esito = elaboraWebhook(dip.db, corpo, coll?.phoneNumberId ?? "", dip.ora?.() ?? Date.now());
-        if (esito.nuovi || esito.eco || esito.storico) registra(dip.db, "whatsapp.ricevuti", "fatto", "sistema", { ...esito });
+        const ora = dip.ora?.() ?? Date.now();
+        const esito = elaboraWebhook(dip.db, corpo, coll?.phoneNumberId ?? "", ora);
+        if (esito.nuovi || esito.eco || esito.storico) {
+          const { eventiAccount: _e, ...numeri } = esito;
+          registra(dip.db, "whatsapp.ricevuti", "fatto", "sistema", numeri);
+        }
+        // Parte 2: messaggi dal vivo = il collegamento lavora; eventi dell'account (scollegato, ricollegato…).
+        if (esito.nuovi || esito.eco) segnaMessaggiInArrivo(dip.db, ora);
+        for (const ev of esito.eventiAccount) await applicaEventoAccount(dip, ev);
         if (esito.nuovi && !prossimo) {
           prossimo = setTimeout(() => { prossimo = null; servizio.giroOra().catch(() => {}); }, RAGGRUPPA_MS + 5000);
           prossimo.unref();

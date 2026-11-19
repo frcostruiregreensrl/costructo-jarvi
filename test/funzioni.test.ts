@@ -11,6 +11,7 @@ import type { Db } from "../src/db.js";
 import { salvaSegreto, salvaImpostazioni, leggiImpostazioni } from "../src/impostazioni.js";
 import { aziendeCollegate } from "../src/aziende.js";
 import { salvaCollegamento } from "../src/whatsapp/collegamento.js";
+import { riepilogoInviiWa } from "../src/whatsapp/contatore.js";
 import { elaboraWebhook } from "../src/whatsapp/elabora.js";
 import { creaServizioWhatsapp } from "../src/whatsapp/servizio.js";
 import { proponiTesto } from "../src/whatsapp/risposte.js";
@@ -437,6 +438,7 @@ test("18 modelli di Meta: spenti di serie (409); accesi servono conferma e impro
     assert.equal(doppio.status, 409);
     assert.match((await doppio.json()).errore, /già stato usato/);
     assert.equal(meta.richieste.length, 1);
+    assert.equal(riepilogoInviiWa(a.db, "Europe/Rome").perTipo.modello, 1, "parte 2: il modello conta nel contatore del mese");
     assert.deepEqual(meta.richieste[0].corpo.template, { name: "promemoria_appuntamento", language: { code: "it" }, components: [{ type: "body", parameters: [{ type: "text", text: "domani" }, { type: "text", text: "10:00" }] }] });
     assert.equal(meta.richieste[0].corpo.to, "393339990000");
     // il giro non manda mai modelli da solo

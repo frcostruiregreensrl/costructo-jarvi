@@ -98,7 +98,9 @@ export async function inviaRisposta(dip: DipendenzeWhatsapp, rispostaId: string,
   }
   const nome = nomeContatto(c);
   try {
-    const wamid = await mandaTesto(coll, { waId: c.wa_id, userId: c.user_id }, r.testo, { fetchFn: dip.fetchFn, attesa: dip.attesaRiprova, risolvi: dip.risolvi });
+    const wamid = await mandaTesto(coll, { waId: c.wa_id, userId: c.user_id }, r.testo, {
+      fetchFn: dip.fetchFn, attesa: dip.attesaRiprova, risolvi: dip.risolvi, contatore: { db, fuso: dip.fuso, tipo: "risposta", ora: dip.ora?.() },
+    });
     const ora = dip.ora?.() ?? Date.now();
     salvaMessaggio(db, { wamid, contattoId: c.id, direzione: "out", tipo: "text", quando: ora, testo: r.testo }, ora);
     db.prepare("UPDATE wa_messaggi SET stato_invio = 'sent' WHERE wamid = ?").run(wamid);

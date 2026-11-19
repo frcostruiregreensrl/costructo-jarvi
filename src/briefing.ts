@@ -13,6 +13,7 @@ import { scaricaCalendario, occorrenze } from "./calendario.js";
 import { inizioGiorno, oraMinuti } from "./tempo.js";
 import type { EventoApple } from "./calendarioApple.js";
 import { statoChat } from "./whatsapp/archivio.js";
+import { avvisiConnessione } from "./whatsapp/connessione.js";
 
 export interface RigaBriefing { testo: string; numero?: { id: string; etichetta: string; valore: number; suffisso?: string } }
 export interface CosaImportante { spazio: "privato" | "lavoro"; testo: string; quando?: string; azienda?: string }
@@ -222,6 +223,8 @@ export async function creaBriefing(o: OpzioniBriefing): Promise<Briefing> {
   if (whatsappPrivato) righe.push({ testo: `WhatsApp privato: ${fraseWhatsapp(whatsappPrivato)}.` });
   const whatsappDaAssegnare = (o.db.prepare("SELECT COUNT(*) n FROM wa_domande WHERE stato = 'aperta'").get() as { n: number }).n;
   if (whatsappDaAssegnare) righe.push({ testo: `WhatsApp: ${plurale(whatsappDaAssegnare, "contatto nuovo", "contatti nuovi")} da assegnare a un'azienda o al privato.` });
+  // Parte 2: collegamento interrotto, oppure niente da 12 giorni (Meta scollega dopo 14 giorni senza aprire l'app).
+  for (const testo of avvisiConnessione(o.db, ora)) righe.push({ testo });
   const pioggia = meteo.filter((m) => (m.pioggia ?? 0) >= 60);
   if (pioggia.length) righe.push({ testo: `Oggi è probabile pioggia su: ${pioggia.map((m) => m.cantiere).join(", ")}.` });
   if (avvisi.length) righe.push({ testo: "Alcune fonti non hanno risposto: trovi i dettagli sullo schermo." });

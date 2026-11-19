@@ -22,6 +22,7 @@ import { creaServizioWhatsapp, notificaUrgentiWa, proponiRichiesteDocumento, TES
 import { attribuisci, dimenticaCache } from "../src/whatsapp/attribuzione.js";
 import { preparaRisposta, inviaRisposta, improntaRisposta } from "../src/whatsapp/risposte.js";
 import { mandaTesto, indirizzoInvio } from "../src/whatsapp/invio.js";
+import { riepilogoInviiWa } from "../src/whatsapp/contatore.js";
 import { pulisciWhatsappVecchio, statoChat, leggiRisposta } from "../src/whatsapp/archivio.js";
 import { normalizzaTelefono, mascheraTelefono } from "../src/whatsapp/telefono.js";
 import { firmaValida } from "../src/whatsapp/webhook.js";
@@ -496,6 +497,7 @@ test("conferme automatiche: spente di serie; accese partono solo se tutte le reg
     assert.equal(r.host, "graph.facebook.com");
     assert.equal(r.intestazioni.authorization, `Bearer ${TOKEN_META}`);
     assert.deepEqual(r.corpo, { messaging_product: "whatsapp", recipient_type: "individual", to: MARIO, type: "text", text: { preview_url: false, body: TESTO_CONFERMA_WA } });
+    assert.equal(riepilogoInviiWa(p.db, "Europe/Rome", p.t.ora).perTipo.conferma, 1, "parte 2: la conferma conta nel contatore del mese");
     const reg = JSON.stringify(p.db.prepare("SELECT * FROM registro WHERE azione = 'whatsapp.conferma_automatica'").all());
     assert.ok(reg.includes("•••222") && !reg.includes(MARIO), "nel registro solo le ultime 3 cifre");
     // La conferma automatica NON vale come risposta di Luigi.
@@ -589,11 +591,14 @@ const risolviFinto = async (host: string) => {
   if (host === "metadati.fornitore-finto.it") return ["169.254.169.254"];
   throw Object.assign(new Error("non trovato"), { code: "ENOTFOUND" });
 };
-const BSP = { provider: "bsp" as const, baseUrl: "https://waba.fornitore-finto.it/v1", versione: "v27.0", phoneNumberId: "", token: "chiave-bsp-finta", intestazione: "D360-API-KEY", appSecret: "", verifyToken: "" };
+const BSP = {
+  provider: "360dialog" as const, baseUrl: "https://waba.fornitore-finto.it/v1", versione: "v27.0", phoneNumberId: "", token: "chiave-bsp-finta", appSecret: "", verifyToken: "",
+  webhookSecret: "", webhookSecretPrecedente: "", precedenteFino: 0, webhookConfigurato: 0, percorsoSalute: "/health_status", percorsoSync: "/smb_app_data",
+};
 const META = { ...BSP, provider: "meta" as const, baseUrl: "", phoneNumberId: PHONE_NUMBER_ID, token: TOKEN_META };
 const rete = (code: string) => Object.assign(new TypeError("fetch failed"), { cause: { code } });
 
-test("invio: fornitore (BSP) con indirizzo e chiave propri; utenti senza numero con «recipient»; errori di Meta in italiano", async () => {
+test("invio: fornitore (360dialog) con indirizzo e chiave propri; utenti senza numero con «recipient»; errori di Meta in italiano", async () => {
   const meta = await avviaMetaFinto();
   try {
     const o = { fetchFn: meta.fetch, attesa: async () => {}, risolvi: risolviFinto };
@@ -917,15 +922,15 @@ test("impostazioni WhatsApp: i segreti non tornano mai (nemmeno in parte), cifra
     const grezzo = (a.db.prepare("SELECT valore FROM segreti WHERE nome = 'whatsapp'").get() as { valore: string }).valore;
     assert.ok(grezzo.startsWith("v1.") && !grezzo.includes(TOKEN_META), "cifrato");
     // Cambio fornitore senza riscrivere il token: rifiutato (il token non va a un altro server)
-    const cambio = await a.chiama("/api/whatsapp/collegamento", { method: "PUT", json: { provider: "bsp", baseUrl: "https://waba.fornitore-finto.it" } });
+    const cambio = await a.chiama("/api/whatsapp/collegamento", { method: "PUT", json: { provider: "360dialog", baseUrl: "https://waba.fornitore-finto.it" } });
     assert.equal(cambio.status, 400);
     assert.match((await cambio.json()).errore, /riscrivi il token/);
     for (const u of ["http://waba.fornitore-finto.it", "https://127.0.0.1", "https://localhost.", "https://x.local", "https://utente:pw@waba.fornitore-finto.it", "https://waba.fornitore-finto.it:8443", "https://interno.fornitore-finto.it", "https://127.0.0.1.nip.io"]) {
-      const r = await a.chiama("/api/whatsapp/collegamento", { method: "PUT", json: { provider: "bsp", baseUrl: u, token: "nuova-chiave" } });
+      const r = await a.chiama("/api/whatsapp/collegamento", { method: "PUT", json: { provider: "360dialog", baseUrl: u, token: "nuova-chiave" } });
       assert.equal(r.status, 400, u);
     }
     assert.equal(leggiCollegamento({ db: a.db, cifratore })!.provider, "meta", "un errore non lascia modifiche a metà");
-    const okBsp = await a.chiama("/api/whatsapp/collegamento", { method: "PUT", json: { provider: "bsp", baseUrl: "https://waba.fornitore-finto.it/", token: "nuova-chiave-bsp" } });
+    const okBsp = await a.chiama("/api/whatsapp/collegamento", { method: "PUT", json: { provider: "360dialog", baseUrl: "https://waba.fornitore-finto.it/", token: "nuova-chiave-bsp" } });
     assert.equal(okBsp.status, 200);
     assert.equal((await okBsp.json()).baseUrl, "https://waba.fornitore-finto.it");
     // Interruttori: conferme automatiche e «nascondi contenuto»

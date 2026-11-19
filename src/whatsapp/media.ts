@@ -2,9 +2,13 @@
 // «Scarica foto e PDF»): senza, Jarvis vede solo tipo, nome del file e didascalia, come nella parte 1.
 //   1) GET https://graph.facebook.com/{versione}/{id del media} (stesso token degli invii) → {url, mime_type, sha256, file_size}
 //   2) GET {url} con lo stesso token, SUBITO: l'indirizzo vale solo 5 minuti.
-// Con un fornitore (BSP, per esempio 360dialog) le stesse richieste passano dal suo indirizzo, con la sua chiave.
-// Il token va SOLO a Meta (graph.facebook.com e gli indirizzi dei file di Meta, *.fbsbx.com / *.whatsapp.net) o al fornitore
-// configurato: nessun reindirizzamento, tempo massimo, dimensione massima, impronta del contenuto controllata.
+// Con 360dialog [non verificato: da controllare al primo allegato vero]:
+//   1) GET {indirizzo di 360dialog}/{id del media} con D360-API-KEY → stesse informazioni, con un url di Meta;
+//   2) 360dialog fa da tramite: si chiede lo STESSO percorso del file ma sul suo indirizzo (si cambia solo il nome
+//      del server: lookaside.fbsbx.com → waba-v2.360dialog.io), sempre con la sua chiave.
+//   Un url che non è né di Meta né di 360dialog si rifiuta. La chiave di 360dialog va SOLO a 360dialog.
+// Il token di Meta va SOLO a Meta (graph.facebook.com e gli indirizzi dei file di Meta, *.fbsbx.com / *.whatsapp.net).
+// Sempre: nessun reindirizzamento, tempo massimo, dimensione massima, impronta del contenuto controllata.
 import { createHash } from "node:crypto";
 import type { RisolviNome } from "../calendario.js";
 import { BASE_META, controllaFornitoreInRete, invioPronto } from "./collegamento.js";
@@ -28,7 +32,7 @@ export async function scaricaMedia(c: CollegamentoWa | null, idMedia: string, o:
   if (!/^[A-Za-z0-9_.\-]{1,100}$/.test(idMedia)) throw new ErroreWhatsapp("Id dell'allegato non valido.");
   const f = o.fetchFn ?? fetch;
   const max = Math.min(o.maxByte ?? MAX_BYTE_MEDIA, MAX_BYTE_MEDIA);
-  const base = c.provider === "bsp" ? await controllaFornitoreInRete(c.baseUrl, o.risolvi) : `${BASE_META}/${encodeURIComponent(c.versione)}`;
+  const base = c.provider === "360dialog" ? await controllaFornitoreInRete(c.baseUrl, o.risolvi) : `${BASE_META}/${encodeURIComponent(c.versione)}`;
   const intestazioni = intestazioniInvio(c);
   delete intestazioni["Content-Type"];
   const chiedi = async (url: string, accetta: string) => {
@@ -46,9 +50,14 @@ export async function scaricaMedia(c: CollegamentoWa | null, idMedia: string, o:
   try { u = new URL(info.url); } catch { throw new ErroreWhatsapp("Indirizzo dell'allegato non valido.", 502); }
   if (u.protocol !== "https:" || u.username || u.password) throw new ErroreWhatsapp("Indirizzo dell'allegato non ammesso.", 502);
   let finale: string;
-  if (c.provider === "bsp") {
-    // Il fornitore fa da tramite: stesso percorso del file, ma sul suo indirizzo (la chiave va solo lì).
-    finale = `${new URL(base).origin}${u.pathname}${u.search}`;
+  if (c.provider === "360dialog") {
+    // 360dialog fa da tramite: stesso percorso del file, ma sul suo indirizzo (la chiave va solo lì).
+    // Ammessi solo url di Meta (si cambia il nome del server) o già di 360dialog; nient'altro.
+    const suo = new URL(base);
+    if (u.hostname.toLowerCase() !== suo.hostname && !hostMediaAmmesso(u.hostname)) {
+      throw new ErroreWhatsapp("Indirizzo dell'allegato fuori da Meta e da 360dialog: non lo scarico.", 502);
+    }
+    finale = `${suo.origin}${u.pathname}${u.search}`;
   } else {
     if (!hostMediaAmmesso(u.hostname)) throw new ErroreWhatsapp("Indirizzo dell'allegato fuori da Meta: non lo scarico.", 502);
     finale = u.href;
